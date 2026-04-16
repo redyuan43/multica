@@ -144,7 +144,8 @@ The daemon auto-detects these AI CLIs on your PATH:
 | OpenClaw | `openclaw` | Open-source coding agent |
 | Hermes | `hermes` | Nous Research coding agent |
 | Gemini | `gemini` | Google's coding agent |
-| [Pi](https://github.com/paperclipai/paperclip) | `pi` | Paperclip's coding agent |
+| [Pi](https://pi.dev/) | `pi` | Pi coding agent |
+| [Cursor Agent](https://cursor.com/) | `cursor-agent` | Cursor's headless coding agent |
 
 You need at least one installed. The daemon registers each detected CLI as an available runtime.
 
@@ -189,6 +190,8 @@ Agent-specific overrides:
 | `MULTICA_GEMINI_MODEL` | Override the Gemini model used |
 | `MULTICA_PI_PATH` | Custom path to the `pi` binary |
 | `MULTICA_PI_MODEL` | Override the Pi model used |
+| `MULTICA_CURSOR_PATH` | Custom path to the `cursor-agent` binary |
+| `MULTICA_CURSOR_MODEL` | Override the Cursor Agent model used |
 
 ### Self-Hosted Server
 

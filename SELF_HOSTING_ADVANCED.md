@@ -84,6 +84,8 @@ Agent-specific overrides:
 | `MULTICA_GEMINI_MODEL` | Override the Gemini model used |
 | `MULTICA_PI_PATH` | Custom path to the `pi` binary |
 | `MULTICA_PI_MODEL` | Override the Pi model used |
+| `MULTICA_CURSOR_PATH` | Custom path to the `cursor-agent` binary |
+| `MULTICA_CURSOR_MODEL` | Override the Cursor Agent model used |
 
 ## Database Setup
 
