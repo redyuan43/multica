@@ -173,6 +173,22 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		c.closeAllPending(fmt.Errorf("codex process exited"))
 	}()
 
+	// drainAndWait closes stdin so codex shuts down, then joins cmd.Wait().
+	// cmd.Wait() is the only Go-stdlib-documented synchronization point for
+	// os/exec's internal stderr/stdout copy goroutines — until it returns,
+	// stderrBuf may not have observed every byte codex wrote before it
+	// exited, and stderrBuf.Tail() can come back empty or truncated. Any
+	// code that reads stderrBuf.Tail() must call drainAndWait() first.
+	// sync.Once makes it safe to call from both error paths and the deferred
+	// cleanup.
+	var waitOnce sync.Once
+	drainAndWait := func() {
+		waitOnce.Do(func() {
+			stdin.Close()
+			_ = cmd.Wait()
+		})
+	}
+
 	// Drive the session lifecycle in a goroutine.
 	// Shutdown sequence: lifecycle goroutine closes stdin + cancels context →
 	// codex process exits → reader goroutine's scanner.Scan() returns false →
@@ -181,10 +197,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		defer cancel()
 		defer close(msgCh)
 		defer close(resCh)
-		defer func() {
-			stdin.Close()
-			_ = cmd.Wait()
-		}()
+		defer drainAndWait()
 
 		startTime := time.Now()
 		finalStatus := "completed"
@@ -202,6 +215,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			},
 		})
 		if err != nil {
+			drainAndWait() // flush os/exec stderr goroutine before sampling Tail
 			finalStatus = "failed"
 			finalError = withCodexStderr(fmt.Sprintf("codex initialize failed: %v", err), stderrBuf.Tail())
 			resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
@@ -214,6 +228,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		// back to a fresh thread so the task still makes progress.
 		threadID, resumed, err := c.startOrResumeThread(runCtx, opts, b.cfg.Logger)
 		if err != nil {
+			drainAndWait() // flush os/exec stderr goroutine before sampling Tail
 			finalStatus = "failed"
 			finalError = withCodexStderr(err.Error(), stderrBuf.Tail())
 			resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
@@ -234,6 +249,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			},
 		})
 		if err != nil {
+			drainAndWait() // flush os/exec stderr goroutine before sampling Tail
 			finalStatus = "failed"
 			finalError = withCodexStderr(fmt.Sprintf("codex turn/start failed: %v", err), stderrBuf.Tail())
 			resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
