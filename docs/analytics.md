@@ -19,6 +19,24 @@ All analytics shipping is toggled by environment variables (see `.env.example`):
 Local dev and self-hosted instances run with `POSTHOG_API_KEY=""`, so **no
 events leave the process unless the operator explicitly opts in**.
 
+### Self-hosted instances
+
+Self-hosters should **never inherit a Multica-issued `POSTHOG_API_KEY`** —
+that would route their users' behavior to our analytics project. The
+defaults guarantee this:
+
+- `.env.example` ships `POSTHOG_API_KEY=` empty. The Docker self-host
+  compose does not set a default either.
+- With the key unset, `NewFromEnv` returns `NoopClient` and logs
+  `analytics: POSTHOG_API_KEY not set, using noop client` at startup — a
+  visible confirmation that nothing is shipped.
+- Operators who want their own analytics can set `POSTHOG_API_KEY` and
+  `POSTHOG_HOST` to point at their own PostHog project (Cloud or
+  self-hosted PostHog).
+- The frontend receives the key via `/api/config` (planned for PR 2), so
+  self-hosts' blank server config also disables frontend event shipping
+  automatically — no separate frontend opt-out plumbing required.
+
 ## Architecture
 
 ```
