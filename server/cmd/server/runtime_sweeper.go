@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -34,7 +35,7 @@ const (
 // last_seen_at exceeds the stale threshold, and fails orphaned tasks.
 // This handles cases where the daemon crashes, is killed without calling
 // the deregister endpoint, or leaves tasks in a non-terminal state.
-func runRuntimeSweeper(ctx context.Context, queries *db.Queries, bus *events.Bus) {
+func runRuntimeSweeper(ctx context.Context, queries *db.Queries, taskSvc *service.TaskService, bus *events.Bus) {
 	ticker := time.NewTicker(sweepInterval)
 	defer ticker.Stop()
 
@@ -43,8 +44,8 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, bus *events.Bus
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sweepStaleRuntimes(ctx, queries, bus)
-			sweepStaleTasks(ctx, queries, bus)
+			sweepStaleRuntimes(ctx, queries, taskSvc, bus)
+			sweepStaleTasks(ctx, queries, taskSvc, bus)
 			gcRuntimes(ctx, queries, bus)
 		}
 	}
@@ -52,7 +53,7 @@ func runRuntimeSweeper(ctx context.Context, queries *db.Queries, bus *events.Bus
 
 // sweepStaleRuntimes marks runtimes offline if they haven't heartbeated,
 // then fails any tasks belonging to those offline runtimes.
-func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, bus *events.Bus) {
+func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, taskSvc *service.TaskService, bus *events.Bus) {
 	staleRows, err := queries.MarkStaleRuntimesOffline(ctx, staleThresholdSeconds)
 	if err != nil {
 		slog.Warn("runtime sweeper: failed to mark stale runtimes offline", "error", err)
@@ -77,7 +78,7 @@ func sweepStaleRuntimes(ctx context.Context, queries *db.Queries, bus *events.Bu
 		slog.Warn("runtime sweeper: failed to clean up stale tasks", "error", err)
 	} else if len(failedTasks) > 0 {
 		slog.Info("runtime sweeper: failed orphaned tasks", "count", len(failedTasks))
-		broadcastFailedTasks(ctx, queries, bus, failedTasks)
+		broadcastFailedTasks(ctx, queries, taskSvc, bus, failedTasks)
 	}
 
 	// Notify frontend clients so they re-fetch runtime list.
@@ -130,7 +131,7 @@ func gcRuntimes(ctx context.Context, queries *db.Queries, bus *events.Bus) {
 // - The agent process hangs and the daemon is still heartbeating
 // - The daemon failed to report task completion/failure
 // - A server restart left tasks in a non-terminal state
-func sweepStaleTasks(ctx context.Context, queries *db.Queries, bus *events.Bus) {
+func sweepStaleTasks(ctx context.Context, queries *db.Queries, taskSvc *service.TaskService, bus *events.Bus) {
 	failedTasks, err := queries.FailStaleTasks(ctx, db.FailStaleTasksParams{
 		DispatchTimeoutSecs: dispatchTimeoutSeconds,
 		RunningTimeoutSecs:  runningTimeoutSeconds,
@@ -144,59 +145,73 @@ func sweepStaleTasks(ctx context.Context, queries *db.Queries, bus *events.Bus) 
 	}
 
 	slog.Info("task sweeper: failed stale tasks", "count", len(failedTasks))
-	broadcastFailedTasks(ctx, queries, bus, failedTasks)
+	broadcastFailedTasks(ctx, queries, taskSvc, bus, failedTasks)
 }
 
 // failedTask is a common interface for both sweeper result types.
 type failedTask struct {
-	ID      pgtype.UUID
-	AgentID pgtype.UUID
-	IssueID pgtype.UUID
+	Task          db.AgentTaskQueue
+	FailureReason string
 }
 
 // broadcastFailedTasks publishes task:failed events with the correct WorkspaceID
-// and reconciles agent status for all affected agents.
-func broadcastFailedTasks(ctx context.Context, queries *db.Queries, bus *events.Bus, tasks any) {
+// and reconciles agent status for all affected agents. It also drives the
+// auto-retry path so orphaned/timed-out tasks transparently spawn a fresh
+// attempt without waiting for the user to click rerun.
+func broadcastFailedTasks(ctx context.Context, queries *db.Queries, taskSvc *service.TaskService, bus *events.Bus, tasks any) {
 	var items []failedTask
 	switch ts := tasks.(type) {
-	case []db.FailStaleTasksRow:
+	case []db.AgentTaskQueue:
 		for _, t := range ts {
-			items = append(items, failedTask{ID: t.ID, AgentID: t.AgentID, IssueID: t.IssueID})
-		}
-	case []db.FailTasksForOfflineRuntimesRow:
-		for _, t := range ts {
-			items = append(items, failedTask{ID: t.ID, AgentID: t.AgentID, IssueID: t.IssueID})
+			reason := "agent_error"
+			if t.FailureReason.Valid && t.FailureReason.String != "" {
+				reason = t.FailureReason.String
+			}
+			items = append(items, failedTask{Task: t, FailureReason: reason})
 		}
 	}
 
 	affectedAgents := make(map[string]pgtype.UUID)
 	processedIssues := make(map[string]bool)
+	retriedIssues := make(map[string]bool)
 
 	for _, ft := range items {
+		// Try auto-retry first so the issue stays in_progress rather than
+		// flapping todo → in_progress within a tick.
+		if taskSvc != nil {
+			if child, _ := taskSvc.MaybeRetryFailedTask(ctx, ft.Task); child != nil && ft.Task.IssueID.Valid {
+				retriedIssues[util.UUIDToString(ft.Task.IssueID)] = true
+			}
+		}
+
 		// Look up workspace ID from the issue so the event reaches the right WS room.
 		workspaceID := ""
-		if issue, err := queries.GetIssue(ctx, ft.IssueID); err == nil {
-			workspaceID = util.UUIDToString(issue.WorkspaceID)
-			// If the issue is still in_progress and no other active tasks remain,
-			// reset it back to todo so the daemon can pick it up again.
-			issueKey := util.UUIDToString(ft.IssueID)
-			if issue.Status == "in_progress" && !processedIssues[issueKey] {
-				processedIssues[issueKey] = true
-				hasActive, checkErr := queries.HasActiveTaskForIssue(ctx, ft.IssueID)
-				if checkErr != nil {
-					slog.Warn("runtime sweeper: failed to check active tasks for issue",
-						"issue_id", issueKey,
-						"error", checkErr,
-					)
-				} else if !hasActive {
-					if _, updateErr := queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
-						ID:     ft.IssueID,
-						Status: "todo",
-					}); updateErr != nil {
-						slog.Warn("runtime sweeper: failed to reset stuck issue to todo",
+		if ft.Task.IssueID.Valid {
+			if issue, err := queries.GetIssue(ctx, ft.Task.IssueID); err == nil {
+				workspaceID = util.UUIDToString(issue.WorkspaceID)
+				// If the issue is still in_progress and no other active tasks remain,
+				// reset it back to todo so the daemon can pick it up again. Skip
+				// when we just enqueued a retry — the new task will keep the
+				// issue in_progress soon, no need to flap.
+				issueKey := util.UUIDToString(ft.Task.IssueID)
+				if issue.Status == "in_progress" && !processedIssues[issueKey] && !retriedIssues[issueKey] {
+					processedIssues[issueKey] = true
+					hasActive, checkErr := queries.HasActiveTaskForIssue(ctx, ft.Task.IssueID)
+					if checkErr != nil {
+						slog.Warn("runtime sweeper: failed to check active tasks for issue",
 							"issue_id", issueKey,
-							"error", updateErr,
+							"error", checkErr,
 						)
+					} else if !hasActive {
+						if _, updateErr := queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
+							ID:     ft.Task.IssueID,
+							Status: "todo",
+						}); updateErr != nil {
+							slog.Warn("runtime sweeper: failed to reset stuck issue to todo",
+								"issue_id", issueKey,
+								"error", updateErr,
+							)
+						}
 					}
 				}
 			}
@@ -207,15 +222,16 @@ func broadcastFailedTasks(ctx context.Context, queries *db.Queries, bus *events.
 			WorkspaceID: workspaceID,
 			ActorType:   "system",
 			Payload: map[string]any{
-				"task_id":  util.UUIDToString(ft.ID),
-				"agent_id": util.UUIDToString(ft.AgentID),
-				"issue_id": util.UUIDToString(ft.IssueID),
-				"status":   "failed",
+				"task_id":        util.UUIDToString(ft.Task.ID),
+				"agent_id":       util.UUIDToString(ft.Task.AgentID),
+				"issue_id":       util.UUIDToString(ft.Task.IssueID),
+				"status":         "failed",
+				"failure_reason": ft.FailureReason,
 			},
 		})
 
-		agentKey := util.UUIDToString(ft.AgentID)
-		affectedAgents[agentKey] = ft.AgentID
+		agentKey := util.UUIDToString(ft.Task.AgentID)
+		affectedAgents[agentKey] = ft.Task.AgentID
 	}
 
 	// Reconcile status for each affected agent.

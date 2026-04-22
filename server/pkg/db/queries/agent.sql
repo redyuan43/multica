@@ -69,6 +69,26 @@ INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, 
 VALUES ($1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id))
 RETURNING *;
 
+-- name: CreateRetryTask :one
+-- Clones a parent task into a fresh queued attempt. Carries forward the
+-- agent's resume context (session_id/work_dir) so the child can continue
+-- the conversation when the backend supports it. attempt is incremented;
+-- max_attempts and trigger_comment_id are inherited.
+INSERT INTO agent_task_queue (
+    agent_id, runtime_id, issue_id, chat_session_id, autopilot_run_id,
+    status, priority, trigger_comment_id, context,
+    session_id, work_dir,
+    attempt, max_attempts, parent_task_id
+)
+SELECT
+    p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
+    'queued', p.priority, p.trigger_comment_id, p.context,
+    p.session_id, p.work_dir,
+    p.attempt + 1, p.max_attempts, p.id
+FROM agent_task_queue p
+WHERE p.id = $1
+RETURNING *;
+
 -- name: CancelAgentTasksByIssue :exec
 UPDATE agent_task_queue
 SET status = 'cancelled'
@@ -136,13 +156,40 @@ LIMIT 1;
 -- pointer is preserved on the task row. The next chat task can then fall
 -- back to GetLastChatTaskSession and continue the conversation instead of
 -- silently starting over.
+--
+-- failure_reason is a coarse classifier consumed by the auto-retry path;
+-- 'agent_error' is the safe default when the daemon doesn't supply one.
 UPDATE agent_task_queue
 SET status = 'failed',
     completed_at = now(),
     error = $2,
+    failure_reason = COALESCE(sqlc.narg('failure_reason'), 'agent_error'),
     session_id = COALESCE(sqlc.narg('session_id'), session_id),
     work_dir = COALESCE(sqlc.narg('work_dir'), work_dir)
 WHERE id = $1 AND status IN ('dispatched', 'running')
+RETURNING *;
+
+-- name: UpdateAgentTaskSession :exec
+-- Pins the resume pointer mid-flight so a daemon crash leaves a usable
+-- session_id/work_dir on the task row. No-op if the task is no longer
+-- in dispatched/running.
+UPDATE agent_task_queue
+SET session_id = COALESCE(sqlc.narg('session_id'), session_id),
+    work_dir  = COALESCE(sqlc.narg('work_dir'), work_dir),
+    last_heartbeat_at = now()
+WHERE id = $1 AND status IN ('dispatched', 'running');
+
+-- name: RecoverOrphanedTasksForRuntime :many
+-- Called by the daemon at startup. Atomically fails any dispatched/running
+-- task that the prior incarnation of this runtime owned but did not
+-- finalize. Returns the failed rows so callers can hand them to the
+-- auto-retry path.
+UPDATE agent_task_queue
+SET status = 'failed',
+    completed_at = now(),
+    error = 'daemon restarted while task was in flight',
+    failure_reason = 'runtime_recovery'
+WHERE runtime_id = $1 AND status IN ('dispatched', 'running')
 RETURNING *;
 
 -- name: FailStaleTasks :many
@@ -150,10 +197,11 @@ RETURNING *;
 -- Handles cases where the daemon is alive but the task is orphaned
 -- (e.g. agent process hung, daemon failed to report completion).
 UPDATE agent_task_queue
-SET status = 'failed', completed_at = now(), error = 'task timed out'
+SET status = 'failed', completed_at = now(), error = 'task timed out',
+    failure_reason = 'timeout'
 WHERE (status = 'dispatched' AND dispatched_at < now() - make_interval(secs => @dispatch_timeout_secs::double precision))
    OR (status = 'running' AND started_at < now() - make_interval(secs => @running_timeout_secs::double precision))
-RETURNING id, agent_id, issue_id;
+RETURNING *;
 
 -- name: CancelAgentTask :one
 UPDATE agent_task_queue

@@ -470,14 +470,18 @@ func (s *TaskService) CompleteTask(ctx context.Context, taskID pgtype.UUID, resu
 // tool error), the daemon should pass them so we can preserve the resume
 // pointer on both the task row and the chat_session — otherwise the next
 // chat turn would silently start a brand-new session and lose memory.
-func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir string) (*db.AgentTaskQueue, error) {
+//
+// failureReason is a coarse classifier consumed by the auto-retry path.
+// Pass "" when unknown (treated as 'agent_error').
+func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, sessionID, workDir, failureReason string) (*db.AgentTaskQueue, error) {
 	var task db.AgentTaskQueue
 	if err := s.runInTx(ctx, func(qtx *db.Queries) error {
 		t, err := qtx.FailAgentTask(ctx, db.FailAgentTaskParams{
-			ID:        taskID,
-			Error:     pgtype.Text{String: errMsg, Valid: true},
-			SessionID: pgtype.Text{String: sessionID, Valid: sessionID != ""},
-			WorkDir:   pgtype.Text{String: workDir, Valid: workDir != ""},
+			ID:            taskID,
+			Error:         pgtype.Text{String: errMsg, Valid: true},
+			FailureReason: pgtype.Text{String: failureReason, Valid: failureReason != ""},
+			SessionID:     pgtype.Text{String: sessionID, Valid: sessionID != ""},
+			WorkDir:       pgtype.Text{String: workDir, Valid: workDir != ""},
 		})
 		if err != nil {
 			return err
@@ -521,9 +525,18 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 		return nil, fmt.Errorf("fail task: %w", err)
 	}
 
-	slog.Warn("task failed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID), "error", errMsg)
+	slog.Warn("task failed", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID), "error", errMsg, "failure_reason", failureReason)
 
-	if errMsg != "" && task.IssueID.Valid {
+	// Auto-retry eligible failures (orphan, timeout, runtime_offline,
+	// runtime_recovery). The helper itself enforces attempt < max_attempts
+	// and only triggers for issue/chat tasks.
+	retried, _ := s.MaybeRetryFailedTask(ctx, task)
+
+	// Skip the per-failure system comment when we'll immediately retry —
+	// the new task will surface its own status to the user, and we don't
+	// want to spam the issue with "task timed out" messages on every
+	// daemon hiccup.
+	if errMsg != "" && task.IssueID.Valid && retried == nil {
 		s.createAgentComment(ctx, task.IssueID, task.AgentID, redact.Text(errMsg), "system", task.TriggerCommentID)
 	}
 	// Reconcile agent status
@@ -532,6 +545,119 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 	// Broadcast
 	s.broadcastTaskEvent(ctx, protocol.EventTaskFailed, task)
 
+	return &task, nil
+}
+
+// retryableReasons enumerates failure reasons that the auto-retry path is
+// allowed to act on. Agent-side errors (compile failures, model rejections,
+// etc.) are intentionally excluded — those are real problems that the user
+// should see, not infrastructure flakiness.
+var retryableReasons = map[string]bool{
+	"runtime_offline":  true,
+	"runtime_recovery": true,
+	"timeout":          true,
+}
+
+// MaybeRetryFailedTask spawns a fresh queued attempt for a recently-failed
+// task when the failure was infrastructure-shaped (daemon crash, runtime
+// went offline, dispatch/run timeout) and the task hasn't exhausted its
+// max_attempts budget. The child task inherits agent/runtime/issue/chat
+// links and the parent's session_id/work_dir so the agent can resume the
+// conversation when the backend supports it. Returns the new task, or nil
+// when no retry was created.
+//
+// Autopilot tasks are NOT auto-retried here; the autopilot scheduler owns
+// its own re-run cadence and we don't want to double-fire it.
+func (s *TaskService) MaybeRetryFailedTask(ctx context.Context, parent db.AgentTaskQueue) (*db.AgentTaskQueue, error) {
+	if parent.Status != "failed" {
+		return nil, nil
+	}
+	reason := ""
+	if parent.FailureReason.Valid {
+		reason = parent.FailureReason.String
+	}
+	if !retryableReasons[reason] {
+		return nil, nil
+	}
+	if parent.Attempt >= parent.MaxAttempts {
+		slog.Info("task auto-retry skipped: budget exhausted",
+			"task_id", util.UUIDToString(parent.ID),
+			"attempt", parent.Attempt,
+			"max_attempts", parent.MaxAttempts,
+		)
+		return nil, nil
+	}
+	if parent.AutopilotRunID.Valid {
+		// Autopilot has its own retry semantics; do not double-trigger.
+		return nil, nil
+	}
+	if !parent.IssueID.Valid && !parent.ChatSessionID.Valid {
+		return nil, nil
+	}
+
+	child, err := s.Queries.CreateRetryTask(ctx, parent.ID)
+	if err != nil {
+		slog.Warn("task auto-retry failed",
+			"parent_task_id", util.UUIDToString(parent.ID),
+			"reason", reason,
+			"error", err,
+		)
+		return nil, err
+	}
+	slog.Info("task auto-retry enqueued",
+		"parent_task_id", util.UUIDToString(parent.ID),
+		"child_task_id", util.UUIDToString(child.ID),
+		"reason", reason,
+		"attempt", child.Attempt,
+		"max_attempts", child.MaxAttempts,
+	)
+	s.broadcastTaskEvent(ctx, protocol.EventTaskDispatch, child)
+	return &child, nil
+}
+
+// RerunIssue creates a fresh queued task for the agent currently assigned
+// to the issue. Used by the manual rerun endpoint. Carries the most recent
+// session_id/work_dir on the issue (across any status) so the new run
+// resumes from where the prior one left off when the backend supports it.
+func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, triggerCommentID pgtype.UUID) (*db.AgentTaskQueue, error) {
+	issue, err := s.Queries.GetIssue(ctx, issueID)
+	if err != nil {
+		return nil, fmt.Errorf("load issue: %w", err)
+	}
+	if !issue.AssigneeID.Valid || issue.AssigneeType.String != "agent" {
+		return nil, fmt.Errorf("issue is not assigned to an agent")
+	}
+	// Make room for the new task — the per-(issue, agent) unique index
+	// rejects two pending tasks at once, and a stuck running task would
+	// also block the rerun. Cancel both queued and active prior tasks
+	// for this agent on the issue.
+	tasks, err := s.Queries.ListActiveTasksByIssue(ctx, issueID)
+	if err == nil {
+		for _, t := range tasks {
+			if util.UUIDToString(t.AgentID) != util.UUIDToString(issue.AssigneeID) {
+				continue
+			}
+			if _, cerr := s.CancelTask(ctx, t.ID); cerr != nil {
+				slog.Warn("rerun: cancel prior task failed",
+					"task_id", util.UUIDToString(t.ID),
+					"error", cerr,
+				)
+			}
+		}
+	}
+	// Also cancel any still-queued task to avoid the unique index conflict.
+	if err := s.Queries.CancelAgentTasksByIssue(ctx, issueID); err != nil {
+		slog.Warn("rerun: cancel pending tasks failed", "issue_id", util.UUIDToString(issueID), "error", err)
+	}
+	task, err := s.EnqueueTaskForIssue(ctx, issue, triggerCommentID)
+	if err != nil {
+		return nil, err
+	}
+	slog.Info("issue rerun enqueued",
+		"task_id", util.UUIDToString(task.ID),
+		"issue_id", util.UUIDToString(issueID),
+		"agent_id", util.UUIDToString(issue.AssigneeID),
+	)
 	return &task, nil
 }
 
