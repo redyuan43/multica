@@ -39,6 +39,11 @@ let pendingIdentify: { userId: string; props?: Record<string, unknown> } | null 
 // config fetch resolves. We keep the first pending pageview so that step
 // doesn't silently drop.
 let pendingPageview: string | undefined | null = null;
+// Cached super-properties so resetAnalytics() can re-register them after
+// posthog.reset() wipes the persisted set. Without this, logout / account
+// switch silently drops client_type + app_version from every subsequent
+// event until a full reload.
+let superProperties: Record<string, unknown> = {};
 
 export interface AnalyticsConfig {
   key: string;
@@ -112,11 +117,11 @@ export function initAnalytics(config: AnalyticsConfig | null | undefined): boole
   // (PostHog's own `$lib` reports "web" for both because Electron renderers
   // are Chromium). `app_version` is optional so self-hosted or local dev
   // builds without a version don't pollute the property.
-  const superProps: Record<string, unknown> = {
-    client_type: detectClientType(),
-  };
-  if (config.appVersion) superProps.app_version = config.appVersion;
-  posthog.register(superProps);
+  // We cache the set so resetAnalytics() can re-apply it after
+  // posthog.reset() — reset() clears persisted super-properties otherwise.
+  superProperties = { client_type: detectClientType() };
+  if (config.appVersion) superProperties.app_version = config.appVersion;
+  posthog.register(superProperties);
   initialized = true;
 
   // Flush any identify() that arrived before init resolved.
@@ -158,6 +163,12 @@ export function resetAnalytics(): void {
   pendingPageview = null;
   if (!initialized) return;
   posthog.reset();
+  // reset() wipes persisted super-properties too, so re-register the ones
+  // set at init time. Otherwise every event after logout / account-switch
+  // would be missing client_type + app_version until a full reload.
+  if (Object.keys(superProperties).length > 0) {
+    posthog.register(superProperties);
+  }
 }
 
 /**
