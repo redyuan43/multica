@@ -234,7 +234,7 @@ When using separate domains for frontend and backend, set these environment vari
 FRONTEND_ORIGIN=https://app.example.com
 CORS_ALLOWED_ORIGINS=https://app.example.com
 
-# Frontend (set before building the frontend image)
+# Frontend (only if you are building the web image from source via docker-compose.selfhost.build.yml)
 REMOTE_API_URL=https://api.example.com
 NEXT_PUBLIC_API_URL=https://api.example.com
 NEXT_PUBLIC_WS_URL=wss://api.example.com/ws
@@ -250,15 +250,15 @@ FRONTEND_ORIGIN=http://192.168.1.100:3000
 CORS_ALLOWED_ORIGINS=http://192.168.1.100:3000
 ```
 
-Then rebuild:
+Then restart the stack:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml up -d --build
+docker compose -f docker-compose.selfhost.yml up -d
 ```
 
 The frontend automatically derives the WebSocket URL from the page address, so real-time features (chat streaming, live issue updates, notifications) work over LAN without extra configuration.
 
-> **Note:** If you need to override the WebSocket URL explicitly (e.g. when using a separate backend domain), set `NEXT_PUBLIC_WS_URL` in `.env` and rebuild the frontend image.
+> **Note:** If you need to hard-code a different public API / WebSocket endpoint into the web image, use the source-build override: `docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build`.
 
 ## Health Check
 
@@ -274,8 +274,8 @@ Use this for load balancer health checks or monitoring.
 ## Upgrading
 
 ```bash
-git pull
-docker compose -f docker-compose.selfhost.yml up -d --build
+docker compose -f docker-compose.selfhost.yml pull
+docker compose -f docker-compose.selfhost.yml up -d
 ```
 
-Migrations run automatically on backend startup. They are idempotent — running them multiple times has no effect.
+Set `MULTICA_IMAGE_TAG=edge` in `.env` to follow the `main` channel, or pin to an exact release like `v0.2.4`. Migrations run automatically on backend startup. They are idempotent — running them multiple times has no effect.

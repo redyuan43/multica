@@ -24,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/ins
 multica setup self-host
 ```
 
-This clones the repository, starts all services via Docker Compose, installs the `multica` CLI, then configures it for localhost.
+This installs the `multica` CLI, checks out the latest self-host assets, pulls the official Multica images from GHCR, and configures everything for localhost.
 
 Open http://localhost:3000. To log in, configure `RESEND_API_KEY` in `.env` for email-based codes (recommended), or set `APP_ENV=development` in `.env` to enable the dev master code **`888888`**. See [Step 2 — Log In](#step-2--log-in) for details.
 
@@ -53,6 +53,8 @@ make selfhost
 ```
 
 `make selfhost` automatically creates `.env` from the example, generates a random `JWT_SECRET`, and starts all services via Docker Compose.
+
+By default it pulls the latest stable release images from GHCR. To build the backend/web from your current checkout instead, run `make selfhost-build`.
 
 Once ready:
 
@@ -156,14 +158,14 @@ This reconfigures the CLI for multica.ai, re-authenticates, and restarts the dae
 
 > Your local Docker services are unaffected. Stop them separately if you no longer need them.
 
-## Rebuilding After Updates
+## Upgrading
 
 ```bash
-git pull
-make selfhost
+docker compose -f docker-compose.selfhost.yml pull
+docker compose -f docker-compose.selfhost.yml up -d
 ```
 
-Migrations run automatically on backend startup.
+Set `MULTICA_IMAGE_TAG=edge` in `.env` if you want to follow the `main` channel, or pin to an exact version like `v0.2.4`. Migrations run automatically on backend startup.
 
 ---
 
@@ -186,6 +188,7 @@ JWT_SECRET=$(openssl rand -hex 32)
 Then start everything:
 
 ```bash
+docker compose -f docker-compose.selfhost.yml pull
 docker compose -f docker-compose.selfhost.yml up -d
 ```
 

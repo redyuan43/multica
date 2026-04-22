@@ -85,7 +85,7 @@ multica setup          # Connect to Multica Cloud, log in, start daemon
 > multica setup self-host
 > ```
 >
-> Requires Docker. See the [Self-Hosting Guide](SELF_HOSTING.md) for details.
+> This pulls the official Multica images from GHCR (latest stable by default). Requires Docker. See the [Self-Hosting Guide](SELF_HOSTING.md) for details.
 
 ---
 
