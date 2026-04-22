@@ -164,6 +164,26 @@ func registerListeners(bus *events.Bus, b realtime.Broadcaster) {
 			slog.Error("failed to marshal event", "event_type", e.Type, "error", err)
 			return
 		}
+
+		// Phase 1 (MUL-1138): high-frequency per-resource events go to a
+		// dedicated scope so we don't fan them out to the whole workspace.
+		// Producers should set Event.TaskID / Event.ChatSessionID; if they
+		// don't, fall back to workspace fanout for safety.
+		switch e.Type {
+		case protocol.EventTaskMessage, protocol.EventTaskProgress:
+			if e.TaskID != "" {
+				realtime.M.RecordEvent(e.Type)
+				b.BroadcastToScope(realtime.ScopeTask, e.TaskID, data)
+				return
+			}
+		case protocol.EventChatMessage, protocol.EventChatDone, protocol.EventChatSessionRead:
+			if e.ChatSessionID != "" {
+				realtime.M.RecordEvent(e.Type)
+				b.BroadcastToScope(realtime.ScopeChat, e.ChatSessionID, data)
+				return
+			}
+		}
+
 		if e.WorkspaceID != "" {
 			realtime.M.RecordEvent(e.Type)
 			b.BroadcastToWorkspace(e.WorkspaceID, data)
