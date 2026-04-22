@@ -291,9 +291,6 @@ export function createZhDict(allowSignup: boolean): LandingDict {
           "孤儿任务自动恢复——意外中断的 Agent 执行会自动重试,必要时可手动重跑",
           "Issue、评论与 Chat 支持 LaTeX 渲染",
           "Chat Focus 模式——将当前页面作为上下文分享给对话",
-          "新增 `/download` 独立页与应用内「What's new」更新日志入口",
-          "Autopilot 创建/编辑统一为同一个对话框",
-          "自部署新增公开 GHCR 部署流——`docker compose pull` 即可,不再需要本地构建",
         ],
         improvements: [
           "子 Issue 的 `status_changed` 事件不再向父 Issue 订阅者刷屏",

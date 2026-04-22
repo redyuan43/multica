@@ -291,9 +291,6 @@ export function createEnDict(allowSignup: boolean): LandingDict {
           "Orphan-task recovery — abandoned agent runs auto-retry, with manual rerun as fallback",
           "LaTeX rendering in issues, comments and chat",
           "Chat Focus mode — share the page you're on as conversation context",
-          "Dedicated `/download` page + in-app \"What's new\" release-notes entry",
-          "Unified Autopilot create/edit dialog",
-          "Public GHCR deployment flow for self-hosters — `docker compose pull` instead of building locally",
         ],
         improvements: [
           "Sub-issue `status_changed` events no longer spam parent-issue subscribers",
