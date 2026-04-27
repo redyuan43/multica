@@ -101,15 +101,37 @@ export function useAttachLabel(issueId: string) {
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: (labelId: string) => api.attachLabel(issueId, labelId),
+    onMutate: async (labelId) => {
+      await qc.cancelQueries({ queryKey: labelKeys.byIssue(wsId, issueId) });
+      const prev = qc.getQueryData<IssueLabelsResponse>(labelKeys.byIssue(wsId, issueId));
+      // Resolve the full label from the workspace list cache so the chip
+      // can render immediately with the right name + color. If it isn't
+      // cached we skip the optimistic patch and rely on onSettled refetch.
+      const list = qc.getQueryData<ListLabelsResponse>(labelKeys.list(wsId));
+      const label = list?.labels.find((l) => l.id === labelId);
+      if (label && !prev?.labels.some((l) => l.id === labelId)) {
+        const next: IssueLabelsResponse = {
+          ...prev,
+          labels: [...(prev?.labels ?? []), label],
+        };
+        qc.setQueryData<IssueLabelsResponse>(labelKeys.byIssue(wsId, issueId), next);
+        onIssueLabelsChanged(qc, wsId, issueId, next.labels);
+      }
+      return { prev };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.prev) {
+        qc.setQueryData(labelKeys.byIssue(wsId, issueId), ctx.prev);
+        onIssueLabelsChanged(qc, wsId, issueId, ctx.prev.labels);
+      }
+    },
     onSuccess: (data: IssueLabelsResponse) => {
       // Backend may return an empty object when the post-mutation read fails
-      // (it logs a warning and skips the broadcast). We only apply the list
-      // when the backend gave us one — otherwise rely on onSettled's
-      // invalidation to refetch.
+      // (it logs a warning and skips the broadcast). Only apply the list
+      // when the backend gave us one — otherwise the optimistic patch from
+      // onMutate stands until onSettled's invalidation refetches.
       if (data && Array.isArray(data.labels)) {
         qc.setQueryData<IssueLabelsResponse>(labelKeys.byIssue(wsId, issueId), data);
-        // Mirror into the issues list / detail caches so list/board chips
-        // update immediately for the actor without waiting for the WS event.
         onIssueLabelsChanged(qc, wsId, issueId, data.labels);
       }
     },
