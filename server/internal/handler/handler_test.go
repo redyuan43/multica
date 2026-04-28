@@ -1144,6 +1144,41 @@ func TestRequestBodyUUIDFieldsRejectMalformed(t *testing.T) {
 	}
 }
 
+func TestDaemonDeregisterRejectsMalformedRuntimeID(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/daemon/deregister", map[string]any{
+		"runtime_ids": []string{"not-a-uuid"},
+	})
+	testHandler.DaemonDeregister(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("DaemonDeregister: expected 400 for malformed runtime_ids, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestGetIssueGCCheckRejectsMalformedIssueID(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := newRequest("GET", "/api/daemon/issues/not-a-uuid/gc-check", nil)
+	req = withURLParam(req, "issueId", "not-a-uuid")
+	testHandler.GetIssueGCCheck(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("GetIssueGCCheck: expected 400 for malformed issueId, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSetAgentSkillsRejectsMalformedSkillID(t *testing.T) {
+	agentID := createHandlerTestAgent(t, "Handler Malformed Skill Assignment", nil)
+
+	w := httptest.NewRecorder()
+	req := newRequest("PUT", "/api/agents/"+agentID+"/skills", map[string]any{
+		"skill_ids": []string{"not-a-uuid"},
+	})
+	req = withURLParam(req, "id", agentID)
+	testHandler.SetAgentSkills(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("SetAgentSkills: expected 400 for malformed skill_ids, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestAgentCRUD(t *testing.T) {
 	// List agents
 	w := httptest.NewRecorder()

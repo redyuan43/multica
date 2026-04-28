@@ -457,13 +457,17 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "runtime_ids is required")
 		return
 	}
+	runtimeUUIDs, ok := parseUUIDSliceOrBadRequest(w, req.RuntimeIDs, "runtime_ids")
+	if !ok {
+		return
+	}
 
 	// Track affected workspaces for WS notifications.
 	affectedWorkspaces := make(map[string]bool)
 
-	for _, rid := range req.RuntimeIDs {
+	for i, rid := range req.RuntimeIDs {
 		// Look up the runtime and verify ownership.
-		rt, err := h.Queries.GetAgentRuntime(r.Context(), parseUUID(rid))
+		rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUIDs[i])
 		if err != nil {
 			slog.Warn("deregister: runtime not found", "runtime_id", rid, "error", err)
 			continue
@@ -475,7 +479,7 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if err := h.Queries.SetAgentRuntimeOffline(r.Context(), parseUUID(rid)); err != nil {
+		if err := h.Queries.SetAgentRuntimeOffline(r.Context(), rt.ID); err != nil {
 			slog.Warn("deregister: failed to set offline", "runtime_id", rid, "error", err)
 			continue
 		}
@@ -1463,7 +1467,11 @@ func (h *Handler) GetIssueUsage(w http.ResponseWriter, r *http.Request) {
 // read issue metadata from workspace B via UUID enumeration.
 func (h *Handler) GetIssueGCCheck(w http.ResponseWriter, r *http.Request) {
 	issueID := chi.URLParam(r, "issueId")
-	issue, err := h.Queries.GetIssue(r.Context(), parseUUID(issueID))
+	issueUUID, ok := parseUUIDOrBadRequest(w, issueID, "issue_id")
+	if !ok {
+		return
+	}
+	issue, err := h.Queries.GetIssue(r.Context(), issueUUID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "issue not found")
 		return

@@ -1265,6 +1265,10 @@ func (h *Handler) SetAgentSkills(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	skillUUIDs, ok := parseUUIDSliceOrBadRequest(w, req.SkillIDs, "skill_ids")
+	if !ok {
+		return
+	}
 
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
@@ -1280,10 +1284,10 @@ func (h *Handler) SetAgentSkills(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, skillID := range req.SkillIDs {
+	for _, skillID := range skillUUIDs {
 		if err := qtx.AddAgentSkill(r.Context(), db.AddAgentSkillParams{
 			AgentID: agent.ID,
-			SkillID: parseUUID(skillID),
+			SkillID: skillID,
 		}); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to add agent skill: "+err.Error())
 			return
