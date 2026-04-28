@@ -41,7 +41,7 @@ func NewRealtimeCollector(m *realtime.Metrics) *RealtimeCollector {
 		redisXReadTotal:     newRealtimeDesc("redis_xread_total", "Total Redis XREAD operations by the realtime relay."),
 		redisXReadErrors:    newRealtimeDesc("redis_xread_errors_total", "Total Redis XREAD errors by the realtime relay."),
 		redisAckTotal:       newRealtimeDesc("redis_ack_total", "Total Redis stream acknowledgements by the realtime relay."),
-		redisMirrorErrors:   newRealtimeDesc("redis_mirror_errors_total", "Total Redis mirror write errors by the realtime relay."),
+		redisMirrorErrors:   prometheus.NewDesc("multica_realtime_redis_mirror_errors_total", "Total Redis mirror write errors by the realtime relay.", []string{"target"}, nil),
 		redisMirrorDiverged: newRealtimeDesc("redis_mirror_divergence_total", "Total Redis mirror divergence events by the realtime relay."),
 	}
 }
@@ -88,7 +88,8 @@ func (c *RealtimeCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(c.redisXReadTotal, prometheus.CounterValue, float64(m.RedisXReadTotal.Load()))
 	ch <- prometheus.MustNewConstMetric(c.redisXReadErrors, prometheus.CounterValue, float64(m.RedisXReadErrors.Load()))
 	ch <- prometheus.MustNewConstMetric(c.redisAckTotal, prometheus.CounterValue, float64(m.RedisAckTotal.Load()))
-	ch <- prometheus.MustNewConstMetric(c.redisMirrorErrors, prometheus.CounterValue, float64(m.RedisMirrorPrimaryErrors.Load()+m.RedisMirrorSecondaryErrors.Load()))
+	ch <- prometheus.MustNewConstMetric(c.redisMirrorErrors, prometheus.CounterValue, float64(m.RedisMirrorPrimaryErrors.Load()), "primary")
+	ch <- prometheus.MustNewConstMetric(c.redisMirrorErrors, prometheus.CounterValue, float64(m.RedisMirrorSecondaryErrors.Load()), "secondary")
 	ch <- prometheus.MustNewConstMetric(c.redisMirrorDiverged, prometheus.CounterValue, float64(m.RedisMirrorDivergenceTotal.Load()))
 }
 

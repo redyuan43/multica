@@ -5,6 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 
 	"github.com/multica-ai/multica/server/internal/realtime"
 )
@@ -23,8 +24,8 @@ type Registry struct {
 
 func NewRegistry(opts RegistryOptions) *Registry {
 	reg := prometheus.NewRegistry()
-	reg.MustRegister(prometheus.NewGoCollector())
-	reg.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+	reg.MustRegister(collectors.NewGoCollector())
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 
 	buildInfo := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "multica_build_info",

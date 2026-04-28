@@ -320,8 +320,9 @@ curl http://127.0.0.1:9090/metrics
 
 `METRICS_ADDR` is empty by default, so no metrics listener is started. The
 public API port does not serve `/metrics`; keep it that way for internet-facing
-deployments. Metrics can reveal internal routes, traffic volume, dependency
-state, and runtime health.
+deployments. HTTP request metrics start accumulating only after the metrics
+listener is enabled. Metrics can reveal internal routes, traffic volume,
+dependency state, and runtime health.
 
 For Docker or Kubernetes deployments, prefer a private scrape path: bind the
 metrics listener to an internal interface and protect it with private

@@ -68,3 +68,33 @@ func TestMetricsHandlerOnlyServesMetricsPath(t *testing.T) {
 		t.Fatalf("/health status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
+
+func TestHTTPMiddlewareSkipsHealthProbePaths(t *testing.T) {
+	registry := NewRegistry(RegistryOptions{})
+
+	r := chi.NewRouter()
+	r.Use(registry.HTTP.Middleware)
+	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	r.Get("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	for _, path := range []string{"/health", "/readyz"} {
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want %d", path, rec.Code, http.StatusOK)
+		}
+	}
+
+	metricsRec := httptest.NewRecorder()
+	NewHandler(registry.Gatherer).ServeHTTP(metricsRec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := metricsRec.Body.String()
+	for _, skippedRoute := range []string{`route="/health"`, `route="/readyz"`} {
+		if strings.Contains(body, skippedRoute) {
+			t.Fatalf("metrics body contains skipped health route %q\n%s", skippedRoute, body)
+		}
+	}
+}

@@ -49,6 +49,11 @@ func (m *HTTPMetrics) Middleware(next http.Handler) http.Handler {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isHealthProbePath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		m.inFlight.Inc()
 		defer m.inFlight.Dec()
 
@@ -77,4 +82,13 @@ func routePattern(r *http.Request) string {
 		}
 	}
 	return "unmatched"
+}
+
+func isHealthProbePath(path string) bool {
+	switch path {
+	case "/health", "/healthz", "/readyz":
+		return true
+	default:
+		return false
+	}
 }

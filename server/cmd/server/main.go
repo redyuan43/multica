@@ -284,8 +284,7 @@ func main() {
 		go func() {
 			slog.Info("metrics server starting", "addr", metricsConfig.Addr)
 			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				slog.Error("metrics server error", "error", err)
-				os.Exit(1)
+				slog.Error("metrics server disabled after startup error", "error", err)
 			}
 		}()
 	}
@@ -305,18 +304,21 @@ func main() {
 	slog.Info("shutting down server")
 	sweepCancel()
 	autopilotCancel()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
-	if metricsServer != nil {
-		if err := metricsServer.Shutdown(shutdownCtx); err != nil {
-			slog.Error("metrics server forced to shutdown", "error", err)
-			os.Exit(1)
-		}
-	}
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	apiShutdownCtx, apiShutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := srv.Shutdown(apiShutdownCtx); err != nil {
+		apiShutdownCancel()
 		slog.Error("server forced to shutdown", "error", err)
 		os.Exit(1)
+	}
+	apiShutdownCancel()
+
+	if metricsServer != nil {
+		metricsShutdownCtx, metricsShutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := metricsServer.Shutdown(metricsShutdownCtx); err != nil {
+			slog.Error("metrics server forced to shutdown", "error", err)
+		}
+		metricsShutdownCancel()
 	}
 	slog.Info("server stopped")
 }
