@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -629,6 +630,15 @@ func (h *Handler) ReportLocalSkillImportResult(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
+	creatorUUID, err := util.ParseUUID(req.CreatorID)
+	if err != nil {
+		failMsg := "stored local skill import creator_id is invalid"
+		if ferr := h.LocalSkillImportStore.Fail(r.Context(), requestID, failMsg); ferr != nil {
+			slog.Error("local skill import Fail failed", "error", ferr, "request_id", requestID)
+		}
+		writeError(w, http.StatusInternalServerError, failMsg)
+		return
+	}
 
 	name := body.Skill.Name
 	if req.Name != nil {
@@ -648,8 +658,8 @@ func (h *Handler) ReportLocalSkillImportResult(w http.ResponseWriter, r *http.Re
 	}
 
 	resp, err := h.createSkillWithFiles(r.Context(), skillCreateInput{
-		WorkspaceID: uuidToString(rt.WorkspaceID),
-		CreatorID:   req.CreatorID,
+		WorkspaceID: rt.WorkspaceID,
+		CreatorID:   creatorUUID,
 		Name:        name,
 		Description: description,
 		Content:     body.Skill.Content,

@@ -1104,6 +1104,46 @@ func TestRevokePersonalAccessTokenRejectsMalformedID(t *testing.T) {
 	}
 }
 
+func TestRequestBodyUUIDFieldsRejectMalformed(t *testing.T) {
+	tests := []struct {
+		name   string
+		req    *http.Request
+		handle func(http.ResponseWriter, *http.Request)
+	}{
+		{
+			name: "daemon register workspace_id",
+			req: newRequest("POST", "/api/daemon/register", map[string]any{
+				"workspace_id": "not-a-uuid",
+				"daemon_id":    "daemon-malformed-workspace",
+				"runtimes": []map[string]any{
+					{"name": "codex", "type": "codex", "status": "online"},
+				},
+			}),
+			handle: testHandler.DaemonRegister,
+		},
+		{
+			name: "import starter content workspace_id",
+			req: newRequest("POST", "/api/onboarding/starter-content/import", map[string]any{
+				"workspace_id": "not-a-uuid",
+				"project": map[string]any{
+					"title": "Getting Started",
+				},
+			}),
+			handle: testHandler.ImportStarterContent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			tt.handle(w, tt.req)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("%s: expected 400 for malformed body UUID, got %d: %s", tt.name, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestAgentCRUD(t *testing.T) {
 	// List agents
 	w := httptest.NewRecorder()

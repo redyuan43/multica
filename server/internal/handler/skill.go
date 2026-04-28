@@ -190,6 +190,11 @@ func (h *Handler) CreateSkill(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	creatorUUID := parseUUID(creatorID)
 
 	var req CreateSkillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -210,8 +215,8 @@ func (h *Handler) CreateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.createSkillWithFiles(r.Context(), skillCreateInput{
-		WorkspaceID: workspaceID,
-		CreatorID:   creatorID,
+		WorkspaceID: workspaceUUID,
+		CreatorID:   creatorUUID,
 		Name:        req.Name,
 		Description: req.Description,
 		Content:     req.Content,
@@ -1073,6 +1078,11 @@ func (h *Handler) ImportSkill(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	workspaceUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	creatorUUID := parseUUID(creatorID)
 
 	var req ImportSkillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1112,8 +1122,8 @@ func (h *Handler) ImportSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.createSkillWithFiles(r.Context(), skillCreateInput{
-		WorkspaceID: workspaceID,
-		CreatorID:   creatorID,
+		WorkspaceID: workspaceUUID,
+		CreatorID:   creatorUUID,
 		Name:        imported.name,
 		Description: imported.description,
 		Content:     imported.content,

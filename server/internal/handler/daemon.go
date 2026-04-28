@@ -218,6 +218,11 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "at least one runtime is required")
 		return
 	}
+	wsUUID, ok := parseUUIDOrBadRequest(w, req.WorkspaceID, "workspace_id")
+	if !ok {
+		return
+	}
+	req.WorkspaceID = uuidToString(wsUUID)
 
 	// Verify workspace access and resolve owner.
 	// Daemon tokens (mdt_) prove workspace access directly; OwnerID will be zero
@@ -238,7 +243,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		ownerID = member.UserID
 	}
 
-	ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(req.WorkspaceID))
+	ws, err := h.Queries.GetWorkspace(r.Context(), wsUUID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "workspace not found")
 		return
@@ -274,7 +279,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		})
 
 		row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
-			WorkspaceID: parseUUID(req.WorkspaceID),
+			WorkspaceID: wsUUID,
 			DaemonID:    strToText(req.DaemonID),
 			Name:        name,
 			RuntimeMode: "local",
