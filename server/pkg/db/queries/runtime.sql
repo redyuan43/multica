@@ -33,7 +33,11 @@ DO UPDATE SET
     runtime_mode = EXCLUDED.runtime_mode,
     status = EXCLUDED.status,
     device_info = EXCLUDED.device_info,
-    metadata = EXCLUDED.metadata,
+    metadata = CASE
+        WHEN agent_runtime.metadata ? 'settings'
+        THEN EXCLUDED.metadata || jsonb_build_object('settings', agent_runtime.metadata->'settings')
+        ELSE EXCLUDED.metadata
+    END,
     owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
     last_seen_at = now(),
     updated_at = now()

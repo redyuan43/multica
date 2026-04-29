@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,6 +30,23 @@ type AgentRuntimeResponse struct {
 	LastSeenAt   *string `json:"last_seen_at"`
 	CreatedAt    string  `json:"created_at"`
 	UpdatedAt    string  `json:"updated_at"`
+}
+
+const runtimeMetadataSettingsKey = "settings"
+
+func runtimeSettingsFromMetadata(metadata []byte) map[string]any {
+	if len(metadata) == 0 {
+		return map[string]any{}
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(metadata, &raw); err != nil {
+		return map[string]any{}
+	}
+	settings, _ := raw[runtimeMetadataSettingsKey].(map[string]any)
+	if settings == nil {
+		return map[string]any{}
+	}
+	return settings
 }
 
 func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
@@ -391,6 +409,110 @@ func (h *Handler) ListAgentRuntimes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+type UpdateRuntimeRequest struct {
+	Settings map[string]any `json:"settings"`
+}
+
+func normalizeRuntimeSettings(provider string, settings map[string]any) (map[string]any, string) {
+	normalized := map[string]any{}
+	if settings == nil {
+		return normalized, ""
+	}
+
+	if provider == "codex" {
+		if raw, ok := settings["codex_sandbox_mode"]; ok {
+			mode, _ := raw.(string)
+			mode = strings.TrimSpace(mode)
+			switch mode {
+			case "":
+			case "read-only", "workspace-write", "danger-full-access":
+				normalized["codex_sandbox_mode"] = mode
+			default:
+				return nil, "invalid codex_sandbox_mode"
+			}
+		}
+	}
+
+	return normalized, ""
+}
+
+// UpdateAgentRuntime updates operator-controlled runtime settings. Runtime
+// liveness metadata continues to be owned by daemon registration.
+func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
+	if !ok {
+		return
+	}
+
+	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "runtime not found")
+		return
+	}
+
+	wsID := uuidToString(rt.WorkspaceID)
+	member, ok := h.requireWorkspaceMember(w, r, wsID, "runtime not found")
+	if !ok {
+		return
+	}
+
+	userID := uuidToString(member.UserID)
+	isAdmin := roleAllowed(member.Role, "owner", "admin")
+	isOwner := rt.OwnerID.Valid && uuidToString(rt.OwnerID) == userID
+	if !isAdmin && !isOwner {
+		writeError(w, http.StatusForbidden, "you can only update your own runtimes")
+		return
+	}
+
+	var req UpdateRuntimeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+
+	settings, msg := normalizeRuntimeSettings(rt.Provider, req.Settings)
+	if msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	settingsBytes, err := json.Marshal(settings)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid settings")
+		return
+	}
+
+	var updated db.AgentRuntime
+	err = h.DB.QueryRow(r.Context(), `
+		UPDATE agent_runtime
+		SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{settings}', $2::jsonb, true),
+		    updated_at = now()
+		WHERE id = $1
+		RETURNING id, workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at, created_at, updated_at, owner_id, legacy_daemon_id
+	`, rt.ID, string(settingsBytes)).Scan(
+		&updated.ID,
+		&updated.WorkspaceID,
+		&updated.DaemonID,
+		&updated.Name,
+		&updated.RuntimeMode,
+		&updated.Provider,
+		&updated.Status,
+		&updated.DeviceInfo,
+		&updated.Metadata,
+		&updated.LastSeenAt,
+		&updated.CreatedAt,
+		&updated.UpdatedAt,
+		&updated.OwnerID,
+		&updated.LegacyDaemonID,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update runtime")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, runtimeToResponse(updated))
 }
 
 // DeleteAgentRuntime deletes a runtime after permission and dependency checks.

@@ -1497,6 +1497,23 @@ func TestCodexSandboxPolicyFor(t *testing.T) {
 	}
 }
 
+func TestCodexSandboxPolicyForWithOverride(t *testing.T) {
+	t.Parallel()
+
+	p := codexSandboxPolicyForWithOverride("linux", "0.121.0", "danger-full-access")
+	if p.Mode != "danger-full-access" {
+		t.Fatalf("mode = %q, want danger-full-access", p.Mode)
+	}
+	if p.NetworkAccess {
+		t.Fatal("danger-full-access override should not emit workspace-write network_access")
+	}
+
+	p = codexSandboxPolicyForWithOverride("linux", "0.121.0", "not-a-mode")
+	if p.Mode != "workspace-write" || !p.NetworkAccess {
+		t.Fatalf("invalid override should fall back to workspace-write with network, got %+v", p)
+	}
+}
+
 func TestPrepareCodexHomeEnsuresNetworkAccess(t *testing.T) {
 	// Cannot use t.Parallel() with t.Setenv.
 
@@ -1521,6 +1538,32 @@ func TestPrepareCodexHomeEnsuresNetworkAccess(t *testing.T) {
 	}
 	if !strings.Contains(s, `sandbox_mode = "workspace-write"`) {
 		t.Error("config.toml missing sandbox_mode")
+	}
+}
+
+func TestPrepareCodexHomeHonorsSandboxModeOverride(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv.
+	sharedHome := t.TempDir()
+	t.Setenv("CODEX_HOME", sharedHome)
+
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{
+		GOOS:                "linux",
+		SandboxModeOverride: "danger-full-access",
+	}, testLogger()); err != nil {
+		t.Fatalf("prepareCodexHome failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	if err != nil {
+		t.Fatalf("config.toml not created: %v", err)
+	}
+	s := string(data)
+	if !strings.Contains(s, `sandbox_mode = "danger-full-access"`) {
+		t.Fatalf("config.toml missing override sandbox mode:\n%s", s)
+	}
+	if strings.Contains(s, "sandbox_workspace_write.network_access") {
+		t.Fatalf("danger-full-access override should not emit workspace-write network config:\n%s", s)
 	}
 }
 
@@ -1551,7 +1594,7 @@ func TestReuseRestoresCodexHome(t *testing.T) {
 	}
 
 	// Reuse should restore CodexHome.
-	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{IssueID: "reuse-test"}, testLogger())
+	reused := Reuse(env.WorkDir, "codex", "", "", TaskContextForEnv{IssueID: "reuse-test"}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -1601,7 +1644,7 @@ func TestReuseRestoresCodexPluginCache(t *testing.T) {
 		t.Fatalf("remove codex plugins dir: %v", err)
 	}
 
-	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{IssueID: "reuse-plugin-test"}, testLogger())
+	reused := Reuse(env.WorkDir, "codex", "", "", TaskContextForEnv{IssueID: "reuse-plugin-test"}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -1639,7 +1682,7 @@ func TestReuseWritesMissingCodexWorkspaceSkills(t *testing.T) {
 		t.Fatalf("remove codex skills dir: %v", err)
 	}
 
-	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{
+	reused := Reuse(env.WorkDir, "codex", "", "", TaskContextForEnv{
 		IssueID: "reuse-skill-test",
 		AgentSkills: []SkillContextForEnv{
 			{
@@ -1698,7 +1741,7 @@ func TestReuseUpdatesCodexWorkspaceSkills(t *testing.T) {
 	}
 	defer env.Cleanup(true)
 
-	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{
+	reused := Reuse(env.WorkDir, "codex", "", "", TaskContextForEnv{
 		IssueID: "reuse-skill-update-test",
 		AgentSkills: []SkillContextForEnv{
 			{

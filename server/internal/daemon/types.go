@@ -28,6 +28,7 @@ type Task struct {
 	ID                      string          `json:"id"`
 	AgentID                 string          `json:"agent_id"`
 	RuntimeID               string          `json:"runtime_id"`
+	RuntimeSettings         map[string]any  `json:"runtime_settings,omitempty"`
 	IssueID                 string          `json:"issue_id"`
 	WorkspaceID             string          `json:"workspace_id"`
 	Agent                   *AgentData      `json:"agent,omitempty"`

@@ -45,13 +45,35 @@ type codexSandboxPolicy struct {
 // codexSandboxPolicyFor picks the right policy for the given platform and
 // detected Codex CLI version.
 //
-// - Non-darwin: always workspace-write with network access (Landlock is not
-//   affected by the macOS Seatbelt bug).
-// - darwin with a version at or above CodexDarwinNetworkAccessFixedVersion:
-//   workspace-write with network access (upstream bug fixed).
-// - darwin otherwise (including when the version is unknown): fall back to
-//   danger-full-access so the Multica CLI can reach the API.
+//   - Non-darwin: always workspace-write with network access (Landlock is not
+//     affected by the macOS Seatbelt bug).
+//   - darwin with a version at or above CodexDarwinNetworkAccessFixedVersion:
+//     workspace-write with network access (upstream bug fixed).
+//   - darwin otherwise (including when the version is unknown): fall back to
+//     danger-full-access so the Multica CLI can reach the API.
 func codexSandboxPolicyFor(goos, detectedVersion string) codexSandboxPolicy {
+	return codexSandboxPolicyForWithOverride(goos, detectedVersion, "")
+}
+
+func codexSandboxPolicyForWithOverride(goos, detectedVersion, modeOverride string) codexSandboxPolicy {
+	if modeOverride != "" {
+		mode := strings.TrimSpace(modeOverride)
+		switch mode {
+		case "read-only", "workspace-write", "danger-full-access":
+			return codexSandboxPolicy{
+				Mode:          mode,
+				NetworkAccess: mode == "workspace-write",
+				Reason:        "MULTICA_CODEX_SANDBOX_MODE override",
+			}
+		default:
+			return codexSandboxPolicy{
+				Mode:          "workspace-write",
+				NetworkAccess: true,
+				Reason:        fmt.Sprintf("invalid MULTICA_CODEX_SANDBOX_MODE override %q ignored", modeOverride),
+			}
+		}
+	}
+
 	if goos == "" {
 		goos = runtime.GOOS
 	}
@@ -236,7 +258,7 @@ func ensureCodexSandboxConfig(configPath string, policy codexSandboxPolicy, dete
 		if version == "" {
 			version = "unknown"
 		}
-		logger.Warn("codex sandbox: falling back to danger-full-access on macOS",
+		logger.Warn("codex sandbox: using danger-full-access",
 			"reason", policy.Reason,
 			"codex_version", version,
 			"hint", codexUpgradeHint(),

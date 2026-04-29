@@ -37,6 +37,13 @@ type CodexHomeOptions struct {
 	// daemon falls back to danger-full-access for network access. See
 	// codex_sandbox.go for details.
 	CodexVersion string
+	// SandboxModeOverride, when set, forces the daemon-managed Codex sandbox
+	// mode in the per-task config.toml. This is intentionally narrow: it only
+	// affects Codex tasks launched by the daemon.
+	SandboxModeOverride string
+	// ReadSandboxModeEnv enables the local daemon escape hatch when no explicit
+	// runtime setting was supplied.
+	ReadSandboxModeEnv bool
 	// GOOS overrides the target platform when deciding the sandbox policy.
 	// Empty means use runtime.GOOS. Primarily exists so tests can exercise
 	// both macOS and Linux paths deterministically.
@@ -106,7 +113,11 @@ func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *s
 	// Write a daemon-managed sandbox block into config.toml. On macOS we may
 	// need to fall back to danger-full-access because of openai/codex#10390;
 	// see codex_sandbox.go for the full rationale.
-	policy := codexSandboxPolicyFor(opts.GOOS, opts.CodexVersion)
+	override := opts.SandboxModeOverride
+	if override == "" && opts.ReadSandboxModeEnv {
+		override = os.Getenv("MULTICA_CODEX_SANDBOX_MODE")
+	}
+	policy := codexSandboxPolicyForWithOverride(opts.GOOS, opts.CodexVersion, override)
 	if err := ensureCodexSandboxConfig(filepath.Join(codexHome, "config.toml"), policy, opts.CodexVersion, logger); err != nil {
 		logger.Warn("execenv: codex-home ensure sandbox config failed", "error", err)
 	}

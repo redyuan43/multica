@@ -14,6 +14,7 @@ import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { projectListOptions } from "@multica/core/projects/queries";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { PriorityIcon } from "./priority-icon";
 import { PriorityPicker, AssigneePicker, DueDatePicker } from "./pickers";
@@ -23,6 +24,7 @@ import { ProgressRing } from "./progress-ring";
 import type { ChildProgress } from "./list-row";
 import { IssueActionsContextMenu } from "../actions";
 import { LabelChip } from "../../labels/label-chip";
+import { isIssueAgentActive } from "../utils/agent-active";
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleDateString("en-US", {
@@ -60,6 +62,10 @@ export const BoardCardContent = memo(function BoardCardContent({
     ...projectListOptions(wsId),
     enabled: storeProperties.project && !!issue.project_id,
   });
+  const { data: agents = [] } = useQuery({
+    ...agentListOptions(wsId),
+    enabled: storeProperties.assignee && issue.assignee_type === "agent",
+  });
   const project = issue.project_id ? projects.find((p) => p.id === issue.project_id) : undefined;
   const labels = issue.labels ?? [];
 
@@ -81,6 +87,7 @@ export const BoardCardContent = memo(function BoardCardContent({
   const showProject = storeProperties.project && project;
   const showChildProgress = storeProperties.childProgress && childProgress;
   const showLabels = storeProperties.labels && labels.length > 0;
+  const isAgentActive = isIssueAgentActive(issue, agents);
 
   return (
     <div className="rounded-lg border-[0.5px] border-border bg-card py-3 px-2.5 shadow-[0_3px_6px_-2px_rgba(0,0,0,0.02),0_1px_1px_0_rgba(0,0,0,0.04)] transition-colors group-hover/card:border-accent group-hover/card:bg-accent group-data-[popup-open]/card:border-accent group-data-[popup-open]/card:bg-accent">
@@ -138,6 +145,7 @@ export const BoardCardContent = memo(function BoardCardContent({
                       actorId={issue.assignee_id!}
                       size={22}
                       enableHoverCard
+                      isActive={isAgentActive}
                     />
                   }
                 />
@@ -148,6 +156,7 @@ export const BoardCardContent = memo(function BoardCardContent({
                 actorId={issue.assignee_id!}
                 size={22}
                 enableHoverCard
+                isActive={isAgentActive}
               />
             ))}
           {showPriority &&

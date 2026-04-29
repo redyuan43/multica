@@ -10,11 +10,13 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import { projectListOptions } from "@multica/core/projects/queries";
+import { agentListOptions } from "@multica/core/workspace/queries";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { PriorityIcon } from "./priority-icon";
 import { ProgressRing } from "./progress-ring";
 import { IssueActionsContextMenu } from "../actions";
 import { LabelChip } from "../../labels/label-chip";
+import { isIssueAgentActive } from "../utils/agent-active";
 
 export interface ChildProgress {
   done: number;
@@ -44,6 +46,10 @@ export const ListRow = memo(function ListRow({
     ...projectListOptions(wsId),
     enabled: storeProperties.project && !!issue.project_id,
   });
+  const { data: agents = [] } = useQuery({
+    ...agentListOptions(wsId),
+    enabled: storeProperties.assignee && issue.assignee_type === "agent",
+  });
   const project = issue.project_id ? projects.find((pr) => pr.id === issue.project_id) : undefined;
   const labels = issue.labels ?? [];
 
@@ -52,6 +58,7 @@ export const ListRow = memo(function ListRow({
   const showAssignee = storeProperties.assignee && issue.assignee_type && issue.assignee_id;
   const showDueDate = storeProperties.dueDate && issue.due_date;
   const showLabels = storeProperties.labels && labels.length > 0;
+  const isAgentActive = isIssueAgentActive(issue, agents);
 
   return (
     <IssueActionsContextMenu issue={issue}>
@@ -121,6 +128,7 @@ export const ListRow = memo(function ListRow({
               actorId={issue.assignee_id!}
               size={20}
               enableHoverCard
+              isActive={isAgentActive}
             />
           )}
         </AppLink>

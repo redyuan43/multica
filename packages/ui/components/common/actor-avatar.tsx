@@ -9,6 +9,7 @@ interface ActorAvatarProps {
   initials: string;
   avatarUrl?: string | null;
   isAgent?: boolean;
+  isActive?: boolean;
   size?: number;
   className?: string;
 }
@@ -18,6 +19,7 @@ function ActorAvatar({
   initials,
   avatarUrl,
   isAgent,
+  isActive,
   size = 20,
   className,
 }: ActorAvatarProps) {
@@ -34,6 +36,7 @@ function ActorAvatar({
       className={cn(
         "inline-flex shrink-0 items-center justify-center rounded-full font-medium overflow-hidden",
         "bg-muted text-muted-foreground",
+        isAgent && isActive && "bg-success/15 text-success ring-1 ring-success/40 animate-pulse",
         className
       )}
       style={{ width: size, height: size, fontSize: size * 0.45 }}
@@ -47,7 +50,10 @@ function ActorAvatar({
           onError={() => setImgError(true)}
         />
       ) : isAgent ? (
-        <Bot style={{ width: size * 0.55, height: size * 0.55 }} />
+        <Bot
+          className={cn(isActive && "animate-bounce")}
+          style={{ width: size * 0.55, height: size * 0.55 }}
+        />
       ) : (
         initials
       )}

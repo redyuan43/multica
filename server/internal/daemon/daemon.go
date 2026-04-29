@@ -24,6 +24,19 @@ import (
 // server refresh.
 var ErrRepoNotConfigured = errors.New("repo is not configured for this workspace")
 
+func codexSandboxModeFromRuntimeSettings(settings map[string]any) string {
+	if settings == nil {
+		return ""
+	}
+	mode, _ := settings["codex_sandbox_mode"].(string)
+	switch strings.TrimSpace(mode) {
+	case "read-only", "workspace-write", "danger-full-access":
+		return strings.TrimSpace(mode)
+	default:
+		return ""
+	}
+}
+
 // workspaceState tracks registered runtimes for a single workspace.
 type workspaceState struct {
 	workspaceID     string
@@ -1147,19 +1160,21 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, taskLo
 	// Try to reuse the workdir from a previous task on the same (agent, issue) pair.
 	var env *execenv.Environment
 	codexVersion := d.agentVersion("codex")
+	codexSandboxMode := codexSandboxModeFromRuntimeSettings(task.RuntimeSettings)
 	if task.PriorWorkDir != "" {
-		env = execenv.Reuse(task.PriorWorkDir, provider, codexVersion, taskCtx, d.logger)
+		env = execenv.Reuse(task.PriorWorkDir, provider, codexVersion, codexSandboxMode, taskCtx, d.logger)
 	}
 	if env == nil {
 		var err error
 		env, err = execenv.Prepare(execenv.PrepareParams{
-			WorkspacesRoot: d.cfg.WorkspacesRoot,
-			WorkspaceID:    task.WorkspaceID,
-			TaskID:         task.ID,
-			AgentName:      agentName,
-			Provider:       provider,
-			CodexVersion:   codexVersion,
-			Task:           taskCtx,
+			WorkspacesRoot:   d.cfg.WorkspacesRoot,
+			WorkspaceID:      task.WorkspaceID,
+			TaskID:           task.ID,
+			AgentName:        agentName,
+			Provider:         provider,
+			CodexVersion:     codexVersion,
+			CodexSandboxMode: codexSandboxMode,
+			Task:             taskCtx,
 		}, d.logger)
 		if err != nil {
 			return TaskResult{}, fmt.Errorf("prepare execution environment: %w", err)

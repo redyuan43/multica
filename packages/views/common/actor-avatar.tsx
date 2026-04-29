@@ -26,13 +26,21 @@ interface ActorAvatarProps {
    */
   enableHoverCard?: boolean;
   /**
+   * Backward-compatible flag from prior API: disable hover card on this actor.
+   */
+  disableHoverCard?: boolean;
+  /**
    * Overlay an agent-presence dot at the avatar's bottom-right. Use at
    * decision moments (picker rows, current-assignee display, agent-centric
    * surfaces). Has no effect for non-agent actors. Independent of
-   * `enableHoverCard` so picker rows can show the dot without nesting a
+  * `enableHoverCard` so picker rows can show the dot without nesting a
    * popover inside the dropdown.
    */
   showStatusDot?: boolean;
+  /**
+   * Highlight active status on the avatar shell, used by issue list/board rows.
+   */
+  isActive?: boolean;
 }
 
 const FOCUSABLE_ANCESTOR_SELECTOR =
@@ -44,7 +52,9 @@ export function ActorAvatar({
   size,
   className,
   enableHoverCard,
+  disableHoverCard,
   showStatusDot,
+  isActive,
 }: ActorAvatarProps) {
   const { getActorName, getActorInitials, getActorAvatarUrl } = useActorName();
   const avatar = (
@@ -53,6 +63,7 @@ export function ActorAvatar({
       initials={getActorInitials(actorType, actorId)}
       avatarUrl={getActorAvatarUrl(actorType, actorId)}
       isAgent={actorType === "agent"}
+      isActive={actorType === "agent" && isActive}
       size={size}
       className={className}
     />
@@ -72,7 +83,7 @@ export function ActorAvatar({
     avatar
   );
 
-  if (!enableHoverCard) {
+  if (!enableHoverCard || disableHoverCard) {
     return dotted;
   }
   if (actorType === "agent") {

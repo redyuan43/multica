@@ -14,7 +14,10 @@ import type { AgentRuntime, Agent, MemberWithUser } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
-import { useDeleteRuntime } from "@multica/core/runtimes/mutations";
+import {
+  useDeleteRuntime,
+  useUpdateRuntime,
+} from "@multica/core/runtimes/mutations";
 import { deriveRuntimeHealth } from "@multica/core/runtimes";
 import {
   type AgentPresenceDetail,
@@ -22,6 +25,13 @@ import {
 } from "@multica/core/agents";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@multica/ui/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -68,6 +78,17 @@ function getLaunchedBy(metadata: Record<string, unknown>): string | null {
   return null;
 }
 
+function getRuntimeSettings(
+  metadata: Record<string, unknown>,
+): Record<string, unknown> {
+  const settings = metadata.settings;
+  return settings && typeof settings === "object" && !Array.isArray(settings)
+    ? (settings as Record<string, unknown>)
+    : {};
+}
+
+type CodexSandboxMode = "workspace-write" | "danger-full-access" | "read-only";
+
 function shortDaemonId(id: string | null): string | null {
   if (!id) return null;
   if (id.length <= 10) return id;
@@ -102,8 +123,14 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
   const { byAgent: presenceMap } = useWorkspacePresenceMap(wsId);
   const deleteMutation = useDeleteRuntime(wsId);
   const now = useNowTick();
+  const updateMutation = useUpdateRuntime(wsId);
 
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const settings = getRuntimeSettings(runtime.metadata);
+  const codexSandboxMode =
+    typeof settings.codex_sandbox_mode === "string"
+      ? settings.codex_sandbox_mode
+      : "workspace-write";
 
   const health = deriveRuntimeHealth(runtime, now);
   const ownerMember = runtime.owner_id
@@ -135,6 +162,24 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
 
   const daemonShort = shortDaemonId(runtime.daemon_id);
   const lastSeen = formatLastSeen(runtime.last_seen_at);
+
+  const handleCodexSandboxModeChange = (mode: CodexSandboxMode | null) => {
+    if (!mode) return;
+    updateMutation.mutate(
+      {
+        runtimeId: runtime.id,
+        settings: { ...settings, codex_sandbox_mode: mode },
+      },
+      {
+        onSuccess: () => toast.success("Runtime settings updated"),
+        onError: (e) => {
+          toast.error(
+            e instanceof Error ? e.message : "Failed to update runtime",
+          );
+        },
+      },
+    );
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -214,6 +259,9 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
               launchedBy={launchedBy}
               canDelete={!!canDelete}
               onDelete={() => setDeleteOpen(true)}
+              codexSandboxMode={codexSandboxMode}
+              onCodexSandboxModeChange={handleCodexSandboxModeChange}
+              codexSavePending={updateMutation.isPending}
             />
           </div>
         </div>
@@ -482,12 +530,18 @@ function DiagnosticsCard({
   launchedBy,
   canDelete,
   onDelete,
+  codexSandboxMode,
+  onCodexSandboxModeChange,
+  codexSavePending,
 }: {
   runtime: AgentRuntime;
   cliVersion: string | null;
   launchedBy: string | null;
   canDelete: boolean;
   onDelete: () => void;
+  codexSandboxMode: string;
+  onCodexSandboxModeChange: (mode: CodexSandboxMode | null) => void;
+  codexSavePending: boolean;
 }) {
   const isLocal = runtime.runtime_mode === "local";
   return (
@@ -507,6 +561,35 @@ function DiagnosticsCard({
               isOnline={runtime.status === "online"}
               launchedBy={launchedBy}
             />
+          </div>
+        )}
+        {runtime.runtime_mode === "local" && runtime.provider === "codex" && (
+          <div className={isLocal ? "border-t pt-3" : ""}>
+            <div className="mb-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+              Sandbox
+            </div>
+            <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 p-2.5">
+              <div className="min-w-0">
+                <div className="text-sm">Codex Sandbox</div>
+                <div className="text-xs text-muted-foreground">
+                  Applied to new and reused Codex task environments.
+                </div>
+              </div>
+              <Select
+                value={codexSandboxMode as CodexSandboxMode}
+                onValueChange={onCodexSandboxModeChange}
+                disabled={!canDelete || codexSavePending}
+              >
+                <SelectTrigger className="h-8 w-44">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="workspace-write">workspace-write</SelectItem>
+                  <SelectItem value="danger-full-access">danger-full-access</SelectItem>
+                  <SelectItem value="read-only">read-only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         )}
         {canDelete && (
