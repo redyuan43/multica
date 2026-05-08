@@ -146,13 +146,24 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
     ? currentMember.role === "owner" || currentMember.role === "admin"
     : false;
   const isRuntimeOwner = user && runtime.owner_id === user.id;
-  const canDelete = isAdmin || isRuntimeOwner;
+  const canManageRuntime = !!(isAdmin || isRuntimeOwner);
 
   const servingAgents = agents.filter(
     (a) => a.runtime_id === runtime.id && !a.archived_at,
   );
+  const deleteBlockedMessage =
+    servingAgents.length > 0
+      ? t(($) => $.detail.delete_blocked_by_agents, {
+          count: servingAgents.length,
+        })
+      : null;
+  const canDelete = canManageRuntime && !deleteBlockedMessage;
 
   const handleDelete = () => {
+    if (!canDelete) {
+      if (deleteBlockedMessage) toast.error(deleteBlockedMessage);
+      return;
+    }
     deleteMutation.mutate(runtime.id, {
       onSuccess: () => {
         toast.success(t(($) => $.detail.toast_deleted));
@@ -204,22 +215,26 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
           {runtime.name}
         </span>
         <div className="ml-auto flex items-center gap-2">
-          {!canDelete && (
+          {!canManageRuntime && (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
               <Lock className="h-3 w-3" />
               {t(($) => $.detail.read_only)}
             </span>
           )}
-          {canDelete && (
+          {canManageRuntime && (
             <Tooltip>
               <TooltipTrigger
                 render={
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    onClick={() => setDeleteOpen(true)}
+                    onClick={() => {
+                      if (canDelete) setDeleteOpen(true);
+                    }}
+                    disabled={!canDelete}
                     className="text-muted-foreground hover:text-destructive"
                     aria-label={t(($) => $.detail.delete_aria)}
+                    title={deleteBlockedMessage ?? t(($) => $.detail.delete_tooltip)}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -261,7 +276,8 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
               runtime={runtime}
               cliVersion={cliVersion}
               launchedBy={launchedBy}
-              canDelete={!!canDelete}
+              canDelete={canManageRuntime}
+              deleteBlockedMessage={deleteBlockedMessage}
               onDelete={() => setDeleteOpen(true)}
               codexSandboxMode={codexSandboxMode}
               onCodexSandboxModeChange={handleCodexSandboxModeChange}
@@ -278,6 +294,11 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
             <AlertDialogTitle>{t(($) => $.detail.delete_dialog.title)}</AlertDialogTitle>
             <AlertDialogDescription>
               {t(($) => $.detail.delete_dialog.description, { name: runtime.name })}
+              {deleteBlockedMessage && (
+                <span className="mt-2 block text-xs text-muted-foreground/80">
+                  {deleteBlockedMessage}
+                </span>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -537,6 +558,7 @@ function DiagnosticsCard({
   cliVersion,
   launchedBy,
   canDelete,
+  deleteBlockedMessage,
   onDelete,
   codexSandboxMode,
   onCodexSandboxModeChange,
@@ -546,6 +568,7 @@ function DiagnosticsCard({
   cliVersion: string | null;
   launchedBy: string | null;
   canDelete: boolean;
+  deleteBlockedMessage: string | null;
   onDelete: () => void;
   codexSandboxMode: string;
   onCodexSandboxModeChange: (mode: CodexSandboxMode | null) => void;
@@ -607,7 +630,11 @@ function DiagnosticsCard({
               variant="ghost"
               size="sm"
               className="h-8 w-full justify-start gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive"
-              onClick={onDelete}
+              onClick={() => {
+                if (!deleteBlockedMessage) onDelete();
+              }}
+              disabled={!!deleteBlockedMessage}
+              title={deleteBlockedMessage ?? undefined}
             >
               <Trash2 className="h-3.5 w-3.5" />
               {t(($) => $.detail.delete_button)}

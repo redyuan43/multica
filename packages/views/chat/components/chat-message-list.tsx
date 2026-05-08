@@ -20,6 +20,7 @@ import { ChevronRight, ChevronDown, Brain, AlertCircle, AlertTriangle, Copy } fr
 import { useScrollFade } from "@multica/ui/hooks/use-scroll-fade";
 import { useAutoScroll } from "@multica/ui/hooks/use-auto-scroll";
 import { taskMessagesOptions } from "@multica/core/chat/queries";
+import { isUUID } from "@multica/core/utils";
 import { Markdown } from "@multica/views/common/markdown";
 import { copyMarkdown } from "../../editor";
 import type { AgentAvailability } from "@multica/core/agents";
@@ -54,6 +55,7 @@ export function ChatMessageList({
   useAutoScroll(scrollRef);
 
   const pendingTaskId = pendingTask?.task_id ?? null;
+  const hasRealPendingTaskId = !!pendingTaskId && isUUID(pendingTaskId);
 
   // Once the assistant message for this pending task has landed in the
   // messages list, AssistantMessage owns its rendering — suppress the live
@@ -65,7 +67,7 @@ export function ChatMessageList({
 
   // Live timeline for the in-flight task. useRealtimeSync keeps this cache
   // current via setQueryData on task:message events.
-  const showLiveTimeline = !!pendingTaskId && !pendingAlreadyPersisted;
+  const showLiveTimeline = hasRealPendingTaskId && !pendingAlreadyPersisted;
   const { data: liveTaskMessages } = useQuery({
     ...taskMessagesOptions(pendingTaskId ?? ""),
     enabled: showLiveTimeline,
@@ -173,13 +175,14 @@ function AssistantMessage({
   isPending: boolean;
 }) {
   const taskId = message.task_id;
+  const hasRealTaskId = !!taskId && isUUID(taskId);
 
   // Use the shared taskMessagesOptions so this cache entry is the same one
   // seeded by useRealtimeSync during task execution — zero refetch when the
   // task finishes, since WS already populated it.
   const { data: taskMessages } = useQuery({
     ...taskMessagesOptions(taskId ?? ""),
-    enabled: !!taskId,
+    enabled: hasRealTaskId,
   });
 
   const timeline: ChatTimelineItem[] = (taskMessages ?? []).map(toTimelineItem);
@@ -593,4 +596,3 @@ function ErrorRow({ item }: { item: ChatTimelineItem }) {
 }
 
 // ─── Shared ──────────────────────────────────────────────────────────────
-

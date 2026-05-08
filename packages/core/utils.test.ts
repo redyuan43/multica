@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRequestId, createSafeId, generateUUID, isImeComposing } from "./utils";
+import { createRequestId, createSafeId, generateUUID, isImeComposing, isUUID } from "./utils";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -29,6 +29,13 @@ describe("utils id helpers", () => {
 
     expect(createRequestId()).toBe("12345678");
     expect(createRequestId(12)).toBe("123456781234");
+  });
+
+  it("isUUID accepts backend UUIDs and rejects optimistic ids", () => {
+    expect(isUUID("12345678-1234-4abc-8def-1234567890ab")).toBe(true);
+    expect(isUUID("0198f5cc-b7b5-7c2a-9f53-a987c4d1d123")).toBe(true);
+    expect(isUUID("optimistic-optimistic-1778233186785")).toBe(false);
+    expect(isUUID("not-a-uuid")).toBe(false);
   });
 });
 

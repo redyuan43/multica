@@ -49,6 +49,11 @@ export function createRequestId(length = 8): string {
   return createSafeId().replace(/-/g, "").slice(0, length);
 }
 
+/** True for canonical UUID strings accepted by backend path params. */
+export function isUUID(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 /**
  * True when the keyboard event fires while an IME is composing a multi-key
  * input (e.g. Chinese pinyin, Japanese kana). The Enter that commits the

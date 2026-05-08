@@ -51,6 +51,8 @@
     "delete_aria": "Delete runtime",
     "delete_tooltip": "Delete runtime",
     "delete_button": "Delete runtime",
+    "delete_blocked_by_agents_one": "Cannot delete: {{count}} active agent is still bound to this runtime. Archive or reassign it first.",
+    "delete_blocked_by_agents_other": "Cannot delete: {{count}} active agents are still bound to this runtime. Archive or reassign them first.",
     "last_seen": "last seen {{when}}",
     "fact_owner": "Owner",
     "fact_device": "Device",
@@ -155,7 +157,9 @@
     "row_actions_aria": "Row actions",
     "delete_action": "Delete",
     "delete_permission_hint": "Only the runtime owner and workspace admins can delete this runtime",
-    "delete_admin_hint": "Only the runtime owner and workspace admins can delete a runtime."
+    "delete_admin_hint": "Only the runtime owner and workspace admins can delete a runtime.",
+    "delete_blocked_by_agents_one": "{{count}} active agent is still bound to this runtime",
+    "delete_blocked_by_agents_other": "{{count}} active agents are still bound to this runtime"
   },
   "usage": {
     "period_label": "Period",

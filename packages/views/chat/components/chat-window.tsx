@@ -47,6 +47,7 @@ import {
   useMarkChatSessionRead,
 } from "@multica/core/chat/mutations";
 import { useChatStore } from "@multica/core/chat";
+import { isUUID } from "@multica/core/utils";
 import { ChatMessageList, ChatMessageSkeleton } from "./chat-message-list";
 import { ChatInput } from "./chat-input";
 import {
@@ -291,6 +292,10 @@ export function ChatWindow() {
     apiLogger.info("cancelTask.start", { taskId: pendingTaskId, sessionId: activeSessionId });
     qc.setQueryData(chatKeys.pendingTask(activeSessionId), {});
     qc.invalidateQueries({ queryKey: chatKeys.messages(activeSessionId) });
+    if (!isUUID(pendingTaskId)) {
+      apiLogger.debug("cancelTask skipped: optimistic task id", { taskId: pendingTaskId });
+      return;
+    }
     // Fire-and-forget — UI is already in its post-cancel state. We log the
     // outcome but never block on it.
     api.cancelTaskById(pendingTaskId).then(

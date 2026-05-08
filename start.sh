@@ -9,6 +9,8 @@ GO_VERSION="1.26.1"
 LOCAL_GO_DIR="$ROOT_DIR/.tools/go"
 START_ENV_FILE="$ROOT_DIR/.env.start"
 DEFAULT_FRONTEND_PORT="4000"
+START_BACKEND_PORT=""
+START_FRONTEND_PORT=""
 
 fail() {
   echo ""
@@ -213,13 +215,79 @@ prepare_start_env() {
   set_env_value "$START_ENV_FILE" "PORT" "$backend_port"
   set_env_value "$START_ENV_FILE" "FRONTEND_PORT" "$frontend_port"
   set_env_value "$START_ENV_FILE" "FRONTEND_ORIGIN" "http://localhost:${frontend_port}"
+  set_env_value "$START_ENV_FILE" "CORS_ALLOWED_ORIGINS" "http://localhost:${frontend_port}"
+  set_env_value "$START_ENV_FILE" "ALLOWED_ORIGINS" "http://localhost:${frontend_port}"
   set_env_value "$START_ENV_FILE" "MULTICA_APP_URL" "http://localhost:${frontend_port}"
   set_env_value "$START_ENV_FILE" "GOOGLE_REDIRECT_URI" "http://localhost:${frontend_port}/auth/callback"
   set_env_value "$START_ENV_FILE" "NEXT_PUBLIC_API_URL" "http://localhost:${backend_port}"
   set_env_value "$START_ENV_FILE" "NEXT_PUBLIC_WS_URL" "ws://localhost:${backend_port}/ws"
-  set_env_value "$START_ENV_FILE" "MULTICA_SERVER_URL" "ws://localhost:${backend_port}/ws"
+  set_env_value "$START_ENV_FILE" "MULTICA_SERVER_URL" "http://localhost:${backend_port}"
+
+  START_BACKEND_PORT="$backend_port"
+  START_FRONTEND_PORT="$frontend_port"
 
   info "启动配置：前端 http://localhost:${frontend_port}，后端 http://localhost:${backend_port}"
+}
+
+wait_for_backend() {
+  local url="http://localhost:${START_BACKEND_PORT}/health"
+  local attempt
+
+  info "等待后端就绪..."
+  for attempt in $(seq 1 60); do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
+configure_local_daemon_profile() {
+  local token_file="$HOME/.multica/local-daemons.pat"
+  local profile_dir="$HOME/.multica/profiles/local"
+  local workspace_id
+  local token
+
+  if [ ! -f "$token_file" ]; then
+    info "未找到本地 daemon token，跳过 daemon 自动启动。登录后可运行：make daemon"
+    return 0
+  fi
+
+  ensure_command "jq" "请安装 jq，或登录后手动运行 make daemon。"
+
+  workspace_id="$(
+    docker compose exec -T postgres psql -U "${POSTGRES_USER:-multica}" -d "${POSTGRES_DB:-multica}" -At \
+      -c "SELECT id FROM workspace ORDER BY created_at LIMIT 1;" 2>/dev/null | head -n 1
+  )"
+
+  if [ -z "$workspace_id" ]; then
+    info "当前数据库还没有 workspace，跳过 daemon 自动启动。登录并创建 workspace 后可运行：make daemon"
+    return 0
+  fi
+
+  token="$(tr -d '\n' < "$token_file")"
+  mkdir -p "$profile_dir"
+  umask 077
+  jq -n \
+    --arg server "http://localhost:${START_BACKEND_PORT}" \
+    --arg app "http://localhost:${START_FRONTEND_PORT}" \
+    --arg ws "$workspace_id" \
+    --arg token "$token" \
+    '{server_url:$server, app_url:$app, workspace_id:$ws, token:$token}' \
+    > "$profile_dir/config.json"
+}
+
+start_local_daemon() {
+  configure_local_daemon_profile
+
+  if [ ! -f "$HOME/.multica/profiles/local/config.json" ]; then
+    return 0
+  fi
+
+  info "启动本地 agent daemon..."
+  (cd "$ROOT_DIR/server" && go run ./cmd/multica daemon restart --profile local)
 }
 
 main() {
@@ -229,12 +297,21 @@ main() {
   ensure_go
   ensure_docker
   ensure_command "make" "请安装 make 后重试。"
+  ensure_command "curl" "请安装 curl 后重试。"
 
   prepare_start_env
 
   info "依赖检查通过，开始启动 Multica..."
   make setup ENV_FILE="$START_ENV_FILE"
-  exec make start ENV_FILE="$START_ENV_FILE"
+  make start ENV_FILE="$START_ENV_FILE" &
+  start_pid="$!"
+
+  trap 'kill "$start_pid" 2>/dev/null || true' EXIT INT TERM
+
+  wait_for_backend || fail "后端未能在 60 秒内就绪，请查看上方日志。"
+  start_local_daemon
+
+  wait "$start_pid"
 }
 
 main "$@"

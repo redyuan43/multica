@@ -195,6 +195,7 @@ export function createRuntimeColumns({
             runtime={row.original.runtime}
             wsId={wsId}
             canDelete={row.original.canDelete}
+            activeAgentCount={row.original.workload.agentIds.length}
           />
         </div>
       ),
@@ -480,14 +481,17 @@ function RowMenu({
   runtime,
   wsId,
   canDelete,
+  activeAgentCount,
 }: {
   runtime: AgentRuntime;
   wsId: string;
   canDelete: boolean;
+  activeAgentCount: number;
 }) {
   const { t } = useT("runtimes");
   const deleteMutation = useDeleteRuntime(wsId);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const hasActiveAgents = activeAgentCount > 0;
 
   if (!canDelete) {
     return <span aria-hidden />;
@@ -530,8 +534,17 @@ function RowMenu({
         >
           <DropdownMenuItem
             variant="destructive"
-            onClick={() => setDeleteOpen(true)}
-            title={t(($) => $.list.delete_permission_hint)}
+            disabled={hasActiveAgents}
+            onClick={() => {
+              if (!hasActiveAgents) setDeleteOpen(true);
+            }}
+            title={
+              hasActiveAgents
+                ? t(($) => $.list.delete_blocked_by_agents, {
+                    count: activeAgentCount,
+                  })
+                : t(($) => $.list.delete_permission_hint)
+            }
           >
             <Trash2 className="h-3.5 w-3.5" />
             {t(($) => $.list.delete_action)}

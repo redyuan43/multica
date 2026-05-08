@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
+import { isUUID } from "../utils";
 
 // NOTE on workspace scoping:
 // `wsId` is used only as part of queryKey for cache isolation per workspace.
@@ -70,7 +71,7 @@ export function taskMessagesOptions(taskId: string) {
   return queryOptions({
     queryKey: chatKeys.taskMessages(taskId),
     queryFn: () => api.listTaskMessages(taskId),
-    enabled: !!taskId,
+    enabled: isUUID(taskId),
     staleTime: Infinity,
   });
 }

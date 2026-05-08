@@ -33,6 +33,36 @@ describe("ApiClient", () => {
     }
   });
 
+  it("logs expected conflict responses as warnings", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "runtime has active agents" }), {
+          status: 409,
+          statusText: "Conflict",
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    const logger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const client = new ApiClient("https://api.example.test", { logger });
+
+    await expect(client.deleteRuntime("rt-1")).rejects.toMatchObject({
+      status: 409,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "← 409 /api/runtimes/rt-1",
+      expect.objectContaining({ error: "runtime has active agents" }),
+    );
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
   it("uses the expected HTTP contract for autopilot endpoints", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ autopilots: [], runs: [], total: 0 }), {
