@@ -25,6 +25,7 @@ import type { ChildProgress } from "./list-row";
 import { IssueActionsContextMenu } from "../actions";
 import { LabelChip } from "../../labels/label-chip";
 import { isIssueAgentActive } from "../utils/agent-active";
+import { useT } from "../../i18n";
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleDateString("en-US", {
@@ -55,6 +56,7 @@ export const BoardCardContent = memo(function BoardCardContent({
   editable?: boolean;
   childProgress?: ChildProgress;
 }) {
+  const { t } = useT("issues");
   const storeProperties = useViewStore((s) => s.cardProperties);
   const priorityCfg = PRIORITY_CONFIG[issue.priority];
   const wsId = useWorkspaceId();
@@ -74,10 +76,10 @@ export const BoardCardContent = memo(function BoardCardContent({
     (updates: Partial<UpdateIssueRequest>) => {
       updateIssueMutation.mutate(
         { id: issue.id, ...updates },
-        { onError: () => toast.error("Failed to update issue") },
+        { onError: () => toast.error(t(($) => $.card.update_failed)) },
       );
     },
-    [issue.id, updateIssueMutation],
+    [issue.id, updateIssueMutation, t],
   );
 
   const showPriority = storeProperties.priority;
@@ -168,7 +170,7 @@ export const BoardCardContent = memo(function BoardCardContent({
                   trigger={
                     <span className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${priorityCfg.badgeBg} ${priorityCfg.badgeText}`}>
                       <PriorityIcon priority={issue.priority} className="h-3 w-3" inheritColor />
-                      {priorityCfg.label}
+                      {t(($) => $.priority[issue.priority])}
                     </span>
                   }
                 />

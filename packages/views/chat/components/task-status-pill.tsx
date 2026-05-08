@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { UnicodeSpinner } from "@multica/ui/components/common/unicode-spinner";
-import type { BrailleSpinnerName } from "unicode-animations";
 import type { AgentAvailability } from "@multica/core/agents";
 import type { ChatPendingTask, TaskMessagePayload } from "@multica/core/types";
 import { formatElapsedSecs } from "../lib/format";
+import { useT } from "../../i18n";
 
 interface Props {
   /** Server-authoritative pending-task snapshot (`created_at` anchors the timer). */
@@ -16,91 +15,68 @@ interface Props {
   taskMessages: readonly TaskMessagePayload[];
   /** Resolved presence; pass `undefined` to suppress availability hints. */
   availability: AgentAvailability | undefined;
-  /** When set, `onCancel` is exposed once the task crosses the long-run threshold. */
-  onCancel?: () => void;
 }
 
 interface Stage {
-  /** Standalone label, capitalised so it reads as a complete short phrase
-   *  ("Searching the web · 14s") without needing a subject. Matches the
-   *  ChatGPT / Cursor / Claude style — the agent identity is already on
-   *  the chat header, so we don't repeat it inline. */
   label: string;
-  /** null = static (offline / unstable spinning would feel anxious). */
-  spinner: BrailleSpinnerName | null;
-  /** Stage represents a stable holding state (offline / waiting). When true,
-   *  the label is rendered without the shimmer animation — shimmer implies
-   *  "the agent is actively doing something", which a holding state isn't. */
   static?: boolean;
 }
 
-// Tool → label. Short, action-flavoured phrases — the daemon-reported tool
-// slug is meaningful but ugly ("ToolUse: read"); these are the user-facing
-// translations. Unknown tools fall back to "Working" rather than leaking
-// the raw slug.
-const TOOL_STAGES: Record<string, Stage> = {
-  bash: { label: "Running a command", spinner: "helix" },
-  exec: { label: "Running a command", spinner: "helix" },
-  read: { label: "Reading files", spinner: "scan" },
-  glob: { label: "Reading files", spinner: "scan" },
-  grep: { label: "Searching the code", spinner: "scan" },
-  write: { label: "Making edits", spinner: "cascade" },
-  edit: { label: "Making edits", spinner: "cascade" },
-  multi_edit: { label: "Making edits", spinner: "cascade" },
-  multiedit: { label: "Making edits", spinner: "cascade" },
-  web_search: { label: "Searching the web", spinner: "orbit" },
-  websearch: { label: "Searching the web", spinner: "orbit" },
+type StageKey =
+  | "offline"
+  | "reconnecting"
+  | "queued"
+  | "starting_up"
+  | "thinking"
+  | "typing";
+
+type ToolKey =
+  | "running_command"
+  | "reading_files"
+  | "searching_code"
+  | "making_edits"
+  | "searching_web"
+  | "fallback";
+
+// Tool slug → translation key. Unknown tools fall back to "Working".
+const TOOL_KEY_BY_SLUG: Record<string, Exclude<ToolKey, "fallback">> = {
+  bash: "running_command",
+  exec: "running_command",
+  read: "reading_files",
+  glob: "reading_files",
+  grep: "searching_code",
+  write: "making_edits",
+  edit: "making_edits",
+  multi_edit: "making_edits",
+  multiedit: "making_edits",
+  web_search: "searching_web",
+  websearch: "searching_web",
 };
 
-const STAGE_FALLBACK: Stage = { label: "Working", spinner: "helix" };
-
-// During the first-token gap (status=running but no task_message yet)
-// the agent could be loading the model, opening an API session, or
-// actually reasoning. Rotating the label by elapsed seconds — instead
-// of pinning a single "Thinking..." — makes the wait feel progressive
-// without claiming what the model is literally doing. Boundaries are
-// tiered (each label implies "this is taking a bit longer") rather
-// than randomised, which would jitter on every render.
-function pickThinkingLabel(elapsedSecs: number): string {
-  if (elapsedSecs < 5) return "Thinking";
-  if (elapsedSecs < 15) return "Reasoning";
-  if (elapsedSecs < 30) return "Working through it";
-  return "Taking a closer look";
-}
-
-// Pure stage decision. Two-tier signal: presence + status drive the
-// queued/wait copy, then taskMessages drive the running-state label.
-// Errors deliberately don't flip the pill — the timeline already renders
-// the error inline, and overwriting the label would mask whatever the
-// agent does next.
-function pickStage(
+// Pure stage decision returning translation keys. The hook below maps these
+// keys into localized labels — keeping the decision pure makes it easy to
+// follow the priority rules without translation noise.
+function pickStageKeys(
   status: string | undefined,
   taskMessages: readonly TaskMessagePayload[],
   availability: AgentAvailability | undefined,
-  elapsedSecs: number,
-): Stage {
+): { stageKey: StageKey; toolKey?: ToolKey; static?: boolean } {
   if (
     (status === "queued" || status === "dispatched") &&
     availability === "offline"
   ) {
-    return { label: "Offline", spinner: null, static: true };
+    return { stageKey: "offline", static: true };
   }
   if (
     (status === "queued" || status === "dispatched") &&
     availability === "unstable"
   ) {
-    return { label: "Reconnecting", spinner: "pulse" };
+    return { stageKey: "reconnecting" };
   }
-  if (status === "queued") return { label: "Queued", spinner: "pulse" };
-  if (status === "dispatched") return { label: "Starting up", spinner: "breathe" };
+  if (status === "queued") return { stageKey: "queued" };
+  if (status === "dispatched") return { stageKey: "starting_up" };
 
-  // running: latest meaningful message decides the label. We deliberately
-  // skip both `error` rows (rendered inline by the timeline; flipping the
-  // pill would mask the next real action) and `tool_result` rows
-  // (tool_result is the completion event for a tool_use, not a new stage —
-  // treating it as one made the pill flicker bash → Thinking → grep →
-  // Thinking → web_search on every tool boundary, where reality is just
-  // bash → grep → web_search).
+  // running: latest meaningful message decides the label.
   let latest: TaskMessagePayload | null = null;
   for (let i = taskMessages.length - 1; i >= 0; i--) {
     const m = taskMessages[i];
@@ -110,35 +86,45 @@ function pickStage(
     }
   }
 
-  // No task_message yet — first-token delay. Rotate the thinking label
-  // by elapsed so the user perceives progressive waiting rather than
-  // a stuck "Thinking..." loop.
-  if (!latest) {
-    return { label: pickThinkingLabel(elapsedSecs), spinner: "breathe" };
-  }
-
-  if (latest.type === "thinking") {
-    return { label: pickThinkingLabel(elapsedSecs), spinner: "breathe" };
-  }
-  if (latest.type === "text") {
-    return { label: "Typing", spinner: "braille" };
-  }
+  if (!latest) return { stageKey: "thinking" };
+  if (latest.type === "thinking") return { stageKey: "thinking" };
+  if (latest.type === "text") return { stageKey: "typing" };
   if (latest.type === "tool_use") {
     const tool = (latest.tool ?? "").toLowerCase();
-    return TOOL_STAGES[tool] ?? STAGE_FALLBACK;
+    const toolKey = TOOL_KEY_BY_SLUG[tool] ?? "fallback";
+    // tool_use is technically still "thinking + tool" — surface the tool
+    // label in the toolKey channel; main stage label uses the tool one.
+    return { stageKey: "thinking", toolKey };
   }
-  return { label: pickThinkingLabel(elapsedSecs), spinner: "breathe" };
+  return { stageKey: "thinking" };
 }
 
-const WARNING_THRESHOLD_S = 60;
-const CANCEL_THRESHOLD_S = 300;
+function useResolveStage(): (
+  status: string | undefined,
+  taskMessages: readonly TaskMessagePayload[],
+  availability: AgentAvailability | undefined,
+) => Stage {
+  const { t } = useT("chat");
+  return (status, taskMessages, availability) => {
+    const decision = pickStageKeys(status, taskMessages, availability);
+    if (decision.toolKey) {
+      return {
+        label: t(($) => $.status_pill.tools[decision.toolKey!]),
+      };
+    }
+    return {
+      label: t(($) => $.status_pill.stages[decision.stageKey]),
+      static: decision.static,
+    };
+  };
+}
 
 export function TaskStatusPill({
   pendingTask,
   taskMessages,
   availability,
-  onCancel,
 }: Props) {
+  const resolveStage = useResolveStage();
   // Anchor: locked on first render. Once set we never reassign — otherwise
   // the timer would visibly snap backwards when an optimistic-seeded
   // `Date.now()` anchor is later replaced by a server-side created_at that
@@ -162,48 +148,25 @@ export function TaskStatusPill({
 
   // Effective status — defense-in-depth derive on top of the cache. If any
   // task_message has streamed in, the daemon has by definition started
-  // running; we trust that observation over a stale cache. Catches WS gaps,
-  // reconnect windows, or out-of-order delivery where the cache hasn't been
-  // writethrough'd yet.
+  // running; we trust that observation over a stale cache.
   const status = taskMessages.length > 0 ? "running" : pendingTask.status;
   const elapsedSecs = Math.max(0, Math.floor((now - anchor) / 1000));
-  const stage = pickStage(status, taskMessages, availability, elapsedSecs);
-  const isWarning = elapsedSecs >= WARNING_THRESHOLD_S;
-  const showCancel = !!onCancel && elapsedSecs >= CANCEL_THRESHOLD_S;
-
-  // Shimmer the label whenever the agent is actively doing something —
-  // skipped for `static` stages (offline holding) and `isWarning` (the
-  // amber colour is the signal we want, shimmer would mute it under the
-  // gradient mask).
-  const animateLabel = !stage.static && !isWarning;
+  const stage = resolveStage(status, taskMessages, availability);
 
   return (
     <div
-      className={cn(
-        "flex items-center gap-1.5 px-1 text-xs",
-        isWarning ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground",
-      )}
+      className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground"
       aria-live="polite"
     >
-      {stage.spinner && (
-        <UnicodeSpinner name={stage.spinner} className="opacity-70" />
+      {!stage.static && (
+        <UnicodeSpinner name="breathe" className="opacity-70" />
       )}
       <span className="truncate">
-        <span className={cn(animateLabel && "animate-chat-text-shimmer")}>
+        <span className={cn(!stage.static && "animate-chat-text-shimmer")}>
           {stage.label}
         </span>
         <span className="opacity-70"> · {formatElapsedSecs(elapsedSecs)}</span>
       </span>
-      {showCancel && (
-        <button
-          type="button"
-          onClick={onCancel}
-          className="ml-2 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-foreground hover:bg-accent transition-colors"
-        >
-          <X className="size-3" />
-          Cancel
-        </button>
-      )}
     </div>
   );
 }

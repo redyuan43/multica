@@ -14,8 +14,19 @@ import (
 
 // RepoContextForEnv describes a workspace repo available for checkout.
 type RepoContextForEnv struct {
-	URL         string // remote URL
-	Description string // human-readable description
+	URL string // remote URL
+}
+
+// ProjectResourceForEnv describes a single resource attached to the issue's
+// project. The resource_ref payload is type-specific JSON; the agent reads
+// resources.json on disk for the full structure. This struct only carries
+// fields the meta-skill template needs to render a human-readable summary
+// (URL for github_repo, generic label otherwise).
+type ProjectResourceForEnv struct {
+	ID           string          // server-assigned UUID
+	ResourceType string          // e.g. "github_repo"
+	ResourceRef  json.RawMessage // raw JSONB payload from the API
+	Label        string          // optional user-supplied label
 }
 
 // PrepareParams holds all inputs needed to set up an execution environment.
@@ -38,9 +49,12 @@ type TaskContextForEnv struct {
 	AgentName               string
 	AgentInstructions       string // agent identity/persona instructions, injected into CLAUDE.md
 	AgentSkills             []SkillContextForEnv
-	Repos                   []RepoContextForEnv // workspace repos available for checkout
-	ChatSessionID           string              // non-empty for chat tasks
-	AutopilotRunID          string              // non-empty for autopilot run_only tasks
+	Repos                   []RepoContextForEnv     // workspace repos available for checkout
+	ProjectID               string                  // issue's project, when present
+	ProjectTitle            string                  // human-readable project title
+	ProjectResources        []ProjectResourceForEnv // resources attached to the project
+	ChatSessionID           string                  // non-empty for chat tasks
+	AutopilotRunID          string                  // non-empty for autopilot run_only tasks
 	AutopilotID             string
 	AutopilotTitle          string
 	AutopilotDescription    string
@@ -72,6 +86,16 @@ type Environment struct {
 	CodexHome string
 
 	logger *slog.Logger // for cleanup logging
+}
+
+// PredictRootDir returns the env root path that Prepare would create for the
+// given task, without performing any I/O. Callers use this to claim ownership
+// of the directory (e.g. against the GC loop) before Prepare/Reuse runs.
+func PredictRootDir(workspacesRoot, workspaceID, taskID string) string {
+	if workspacesRoot == "" || workspaceID == "" || taskID == "" {
+		return ""
+	}
+	return filepath.Join(workspacesRoot, workspaceID, shortID(taskID))
 }
 
 // Prepare creates an isolated execution environment for a task.
@@ -188,26 +212,52 @@ func writeCodexWorkspaceSkills(codexHome string, skills []SkillContextForEnv) er
 	return writeSkillFiles(filepath.Join(codexHome, "skills"), skills)
 }
 
+// GCMetaKind identifies which kind of parent record a task workdir belongs to.
+// The GC loop dispatches its decision tree on this value so chat / autopilot /
+// quick-create tasks are no longer forced through the issue-centric path.
+type GCMetaKind string
+
+const (
+	GCKindIssue        GCMetaKind = "issue"
+	GCKindChat         GCMetaKind = "chat"
+	GCKindAutopilotRun GCMetaKind = "autopilot_run"
+	GCKindQuickCreate  GCMetaKind = "quick_create"
+)
+
 // GCMeta is persisted to .gc_meta.json inside the env root so the GC loop
-// can determine which issue this directory belongs to.
+// can decide whether the directory is reclaimable. It is a discriminated
+// union keyed on Kind: only the ID field matching Kind is meaningful.
+//
+// Older meta files (pre-v2) lack the Kind field; readers must default empty
+// Kind to GCKindIssue for backward compatibility — only IssueID was written
+// before, and only issue-centric tasks ever produced a meta file.
 type GCMeta struct {
-	IssueID     string    `json:"issue_id"`
-	WorkspaceID string    `json:"workspace_id"`
-	CompletedAt time.Time `json:"completed_at"`
+	Kind           GCMetaKind `json:"kind,omitempty"`
+	IssueID        string     `json:"issue_id,omitempty"`
+	ChatSessionID  string     `json:"chat_session_id,omitempty"`
+	AutopilotRunID string     `json:"autopilot_run_id,omitempty"`
+	TaskID         string     `json:"task_id,omitempty"`
+	WorkspaceID    string     `json:"workspace_id"`
+	CompletedAt    time.Time  `json:"completed_at"`
 }
 
 const gcMetaFile = ".gc_meta.json"
 
-// WriteGCMeta writes GC metadata into the given directory.
-func WriteGCMeta(envRoot, issueID, workspaceID string) error {
+// WriteGCMeta writes GC metadata into the given directory. The caller is
+// responsible for choosing Kind and populating the matching ID field;
+// CompletedAt is stamped here so callers don't have to think about clocks.
+func WriteGCMeta(envRoot string, meta GCMeta, logger *slog.Logger) error {
 	if envRoot == "" {
 		return nil
 	}
-	meta := GCMeta{
-		IssueID:     issueID,
-		WorkspaceID: workspaceID,
-		CompletedAt: time.Now().UTC(),
+	if meta.Kind == "" {
+		// Defensive: a task that doesn't fit any known kind would write a
+		// meta file the GC loop can't dispatch on. Skip silently — the
+		// directory falls back to the orphan-by-mtime path.
+		logger.Debug("execenv: skipping .gc_meta.json write: kind is empty", "envRoot", envRoot)
+		return nil
 	}
+	meta.CompletedAt = time.Now().UTC()
 	data, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("marshal gc meta: %w", err)
@@ -215,7 +265,9 @@ func WriteGCMeta(envRoot, issueID, workspaceID string) error {
 	return os.WriteFile(filepath.Join(envRoot, gcMetaFile), data, 0o644)
 }
 
-// ReadGCMeta reads GC metadata from a task directory root.
+// ReadGCMeta reads GC metadata from a task directory root. Pre-v2 meta files
+// (no kind field) are normalized to GCKindIssue so the legacy issue path
+// keeps working without a migration.
 func ReadGCMeta(envRoot string) (*GCMeta, error) {
 	data, err := os.ReadFile(filepath.Join(envRoot, gcMetaFile))
 	if err != nil {
@@ -224,6 +276,9 @@ func ReadGCMeta(envRoot string) (*GCMeta, error) {
 	var meta GCMeta
 	if err := json.Unmarshal(data, &meta); err != nil {
 		return nil, err
+	}
+	if meta.Kind == "" {
+		meta.Kind = GCKindIssue
 	}
 	return &meta, nil
 }
